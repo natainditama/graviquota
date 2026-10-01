@@ -10,7 +10,7 @@ const Card: Component<ComponentProps<"div">> = (props) => {
 
 const CardHeader: Component<ComponentProps<"div">> = (props) => {
   const [local, others] = splitProps(props, ["class"]);
-  return <div class={cn("flex flex-col space-y-1.5 p-6", local.class)} {...others} />;
+  return <div class={cn("flex flex-col space-y-2 p-6", local.class)} {...others} />;
 };
 
 const CardTitle: Component<ComponentProps<"h3">> = (props) => {

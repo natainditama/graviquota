@@ -13,7 +13,7 @@ type TextFieldRootProps<T extends ValidComponent = "div"> = TextFieldPrimitive.T
 
 const TextField = <T extends ValidComponent = "div">(props: PolymorphicProps<T, TextFieldRootProps<T>>) => {
   const [local, others] = splitProps(props as TextFieldRootProps, ["class"]);
-  return <TextFieldPrimitive.Root class={cn("flex flex-col gap-1", local.class)} {...others} />;
+  return <TextFieldPrimitive.Root class={cn("flex flex-col gap-1.5", local.class)} {...others} />;
 };
 
 type TextFieldInputProps<T extends ValidComponent = "input"> = TextFieldPrimitive.TextFieldInputProps<T> & {
@@ -73,11 +73,11 @@ const TextFieldTextArea = <T extends ValidComponent = "textarea">(props: Polymor
   );
 };
 
-const labelVariants = cva("text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70", {
+const labelVariants = cva("text-sm font-medium mb-1 leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70", {
   variants: {
     variant: {
       label: "data-[invalid]:text-destructive",
-      description: "font-normal text-muted-foreground",
+      description: "font-normal text-xs text-muted-foreground",
       error: "text-xs text-destructive",
     },
   },
