@@ -4,9 +4,11 @@ import { twMerge } from "tailwind-merge";
 /**
  * Merge Tailwind and conditional CSS class names safely
  */
-export function cn(...inputs: ClassValue[]): string {
+export function mergeTailwindClassNames(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
 }
+
+export const cn = mergeTailwindClassNames;
 
 /**
  * Normalizes an email address for consistent comparison.

@@ -52,7 +52,9 @@ export function createSignedSessionCookie(session: UserSession): string {
   const signedCookieValue = `${payload}.${signature}`;
 
   const isSecure = isProduction || env.APP_URL.startsWith("https://");
-  return `${SESSION_COOKIE_NAME}=${signedCookieValue}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800${isSecure ? "; Secure" : ""}`;
+  // 30 days for refresh tokens (2592000s), 7 days standard (604800s)
+  const maxAge = session.accessToken?.startsWith("1//") ? 2592000 : 604800;
+  return `${SESSION_COOKIE_NAME}=${signedCookieValue}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${isSecure ? "; Secure" : ""}`;
 }
 
 /**

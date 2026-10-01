@@ -26,12 +26,18 @@ export function generateSecureStateToken(): string {
  */
 export function buildGoogleAuthorizationUrl(state?: string): string {
   const redirectUri = `${env.APP_URL}/api/auth/callback`;
+  const isLocalEnv = env.APP_URL.includes("localhost") || env.APP_URL.includes("127.0.0.1");
+
+  const clientId = isLocalEnv ? ANTIGRAVITY_CLIENT_ID : env.GOOGLE_CLIENT_ID;
+  const scopes = isLocalEnv
+    ? "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/aicode https://www.googleapis.com/auth/cloud-platform"
+    : "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cloud-platform";
 
   const params = new URLSearchParams({
-    client_id: env.GOOGLE_CLIENT_ID,
+    client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cloud-platform",
+    scope: scopes,
     access_type: "offline",
     prompt: "consent",
     include_granted_scopes: "true",
@@ -55,11 +61,15 @@ export async function exchangeCodeForTokens(code: string): Promise<{
   scope?: string;
 }> {
   const redirectUri = `${env.APP_URL}/api/auth/callback`;
+  const isLocalEnv = env.APP_URL.includes("localhost") || env.APP_URL.includes("127.0.0.1");
+
+  const clientId = isLocalEnv ? ANTIGRAVITY_CLIENT_ID : env.GOOGLE_CLIENT_ID;
+  const clientSecret = isLocalEnv ? ANTIGRAVITY_CLIENT_SECRET : env.GOOGLE_CLIENT_SECRET;
 
   const body = new URLSearchParams({
     code,
-    client_id: env.GOOGLE_CLIENT_ID,
-    client_secret: env.GOOGLE_CLIENT_SECRET,
+    client_id: clientId,
+    client_secret: clientSecret,
     redirect_uri: redirectUri,
     grant_type: "authorization_code",
   });

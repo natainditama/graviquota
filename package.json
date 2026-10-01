@@ -5,7 +5,8 @@
     "dev": "vite dev",
     "build": "vite build",
     "start": "node .output/server/index.mjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "login": "node scripts/login.mjs"
   },
   "dependencies": {
     "@corvu/drawer": "^0.2.4",

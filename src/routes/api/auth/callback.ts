@@ -46,12 +46,15 @@ export async function GET(event: APIEvent) {
     const profile = await fetchGoogleUserProfile(tokens.access_token);
 
     // Scenario 6: Construct session payload and issue HMAC-signed session cookie
+    const hasRefreshToken = Boolean(tokens.refresh_token);
     const session: UserSession = {
       email: profile.email,
       name: profile.name,
       picture: profile.picture,
-      accessToken: tokens.access_token,
-      expiresAt: Date.now() + (tokens.expires_in || 3600) * 1000,
+      accessToken: tokens.refresh_token || tokens.access_token,
+      expiresAt: hasRefreshToken
+        ? Date.now() + 30 * 24 * 60 * 60 * 1000
+        : Date.now() + (tokens.expires_in || 3600) * 1000,
     };
 
     const sessionCookie = createSignedSessionCookie(session);

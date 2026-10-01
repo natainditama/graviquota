@@ -62,4 +62,12 @@ export function validateServerEnvironmentConfig(): Env {
 
 export const env = validateServerEnvironmentConfig();
 export const isProduction = env.NODE_ENV === "production";
-export const isGoogleConfigured = Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
+/**
+ * Check if Google OAuth authentication is configured or supported in current environment
+ */
+export function isGoogleOAuthReady(): boolean {
+  const isLocalEnv = env.APP_URL.includes("localhost") || env.APP_URL.includes("127.0.0.1");
+  return isLocalEnv || Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
+}
+
+export const isGoogleConfigured = isGoogleOAuthReady();

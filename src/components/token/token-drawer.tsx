@@ -48,33 +48,66 @@ export const TokenDrawer: Component<TokenDrawerProps> = (props) => {
 
         {/* Content Body */}
         <div class="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-          {/* Quick Script Method */}
+          {/* Method 1: Independent Google Login CLI */}
           <Card class="shadow-none border-primary/40 bg-primary/5">
             <CardHeader class="p-4 space-y-2">
               <div class="flex items-center justify-between">
-                <CardTitle class="text-sm font-semibold text-primary">Fast Method: 1-Click Script (Recommended)</CardTitle>
-                <Badge variant="outline" round>Automated</Badge>
+                <CardTitle class="text-sm font-semibold text-primary">Method 1: Direct Google Login CLI (Recommended)</CardTitle>
+                <Badge variant="outline" round>No Antigravity App Needed</Badge>
               </div>
               <CardDescription class="text-xs">
-                Run the bundled helper script in your terminal to automatically copy your active Antigravity token directly to your clipboard.
+                Authenticates directly with Google via your browser and generates a permanent 30-day token. You do <strong>not</strong> need the Antigravity desktop IDE installed or running.
               </CardDescription>
             </CardHeader>
             <CardContent class="p-4 pt-0 space-y-2.5">
               <div class="space-y-1">
-                <p class="text-xs font-medium text-foreground">Windows (PowerShell):</p>
+                <p class="text-xs font-medium text-foreground">Git Bash / Terminal / macOS / Linux:</p>
                 <div class="flex items-center justify-between bg-muted/60 px-3 py-1 rounded-md border border-border font-mono text-xs">
-                  <span class="truncate">powershell -ExecutionPolicy Bypass -File .\scripts\copy-token.ps1</span>
-                  <Button variant="ghost" size="sm" onClick={() => copyText("powershell -ExecutionPolicy Bypass -File .\\scripts\\copy-token.ps1", "script_ps1")}>
-                    {copiedId() === "script_ps1" ? <Check class="size-3.5 text-success-foreground" /> : <Copy class="size-3.5" />}
+                  <span class="truncate">./scripts/login.sh</span>
+                  <Button variant="ghost" size="sm" onClick={() => copyText("./scripts/login.sh", "script_login_sh")}>
+                    {copiedId() === "script_login_sh" ? <Check class="size-3.5 text-success-foreground" /> : <Copy class="size-3.5" />}
                   </Button>
                 </div>
               </div>
               <div class="space-y-1">
-                <p class="text-xs font-medium text-foreground">macOS / Linux / Git Bash:</p>
+                <p class="text-xs font-medium text-foreground">Or via Node / Bun package manager:</p>
                 <div class="flex items-center justify-between bg-muted/60 px-3 py-1 rounded-md border border-border font-mono text-xs">
-                  <span class="truncate">./scripts/copy-token.sh</span>
-                  <Button variant="ghost" size="sm" onClick={() => copyText("./scripts/copy-token.sh", "script_sh")}>
-                    {copiedId() === "script_sh" ? <Check class="size-3.5 text-success-foreground" /> : <Copy class="size-3.5" />}
+                  <span class="truncate">bun run login</span>
+                  <Button variant="ghost" size="sm" onClick={() => copyText("bun run login", "script_bun_login")}>
+                    {copiedId() === "script_bun_login" ? <Check class="size-3.5 text-success-foreground" /> : <Copy class="size-3.5" />}
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Method 2: Extract Existing Token from Antigravity IDE */}
+          <Card class="shadow-none border-border">
+            <CardHeader class="p-4 space-y-2">
+              <div class="flex items-center justify-between">
+                <CardTitle class="text-sm font-semibold">Method 2: Extract from Antigravity IDE (If logged in)</CardTitle>
+                <Badge variant="secondary" round>Desktop IDE</Badge>
+              </div>
+              <CardDescription class="text-xs">
+                If you already have the Antigravity desktop IDE logged in on your machine, copy the token directly from local storage:
+              </CardDescription>
+            </CardHeader>
+            <CardContent class="p-4 pt-0 space-y-2.5">
+              <div class="space-y-1">
+                <p class="text-xs font-medium text-foreground">Git Bash / macOS / Linux:</p>
+                <div class="flex items-center justify-between bg-muted/60 px-3 py-1 rounded-md border border-border font-mono text-xs">
+                  <span class="truncate">./scripts/copy-token.sh --refresh</span>
+                  <Button variant="ghost" size="sm" onClick={() => copyText("./scripts/copy-token.sh --refresh", "script_copy_sh")}>
+                    {copiedId() === "script_copy_sh" ? <Check class="size-3.5 text-success-foreground" /> : <Copy class="size-3.5" />}
+                  </Button>
+                </div>
+              </div>
+              <div class="space-y-1">
+                <p class="text-xs font-medium text-foreground">Windows (PowerShell):</p>
+                <div class="flex items-center justify-between bg-muted/60 px-3 py-1 rounded-md border border-border font-mono text-xs">
+                  <span class="truncate">powershell -ExecutionPolicy Bypass -File .\scripts\copy-token.ps1 -RefreshToken</span>
+                  <Button variant="ghost" size="sm" onClick={() => copyText("powershell -ExecutionPolicy Bypass -File .\\scripts\\copy-token.ps1 -RefreshToken", "script_ps1")}>
+                    {copiedId() === "script_ps1" ? <Check class="size-3.5 text-success-foreground" /> : <Copy class="size-3.5" />}
                   </Button>
                 </div>
               </div>

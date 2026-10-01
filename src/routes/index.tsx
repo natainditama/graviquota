@@ -1,4 +1,4 @@
-import { createSignal, Show } from "solid-js";
+import { createSignal, onMount, Show } from "solid-js";
 import { query, createAsync, useSearchParams } from "@solidjs/router";
 import { AppNavbar } from "~/components/layout/app-navbar";
 import { UsageCard } from "~/components/quota/usage-card";
@@ -119,6 +119,21 @@ export default function Home() {
       setIsMutating(false);
     }
   };
+
+  // Automatically apply token if passed in query string (e.g. from login CLI)
+  onMount(() => {
+    const queryToken = searchParams.token;
+    if (queryToken && typeof queryToken === "string") {
+      handleApplyManualToken(queryToken);
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("token");
+        window.history.replaceState({}, document.title, url.pathname + (url.search ? url.search : ""));
+      } catch {
+        // Safe fallback in non-standard environments
+      }
+    }
+  });
 
   const handleResetQuota = () => {
     setManualToken(null);
