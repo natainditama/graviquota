@@ -1,5 +1,6 @@
 import type { APIEvent } from "@solidjs/start/server";
 import { fetchUnifiedQuotaData } from "~/lib/quota";
+import { createSignedSessionCookie } from "~/lib/cookie";
 
 export async function GET(event: APIEvent) {
   const url = new URL(event.request.url);
@@ -12,12 +13,24 @@ export async function GET(event: APIEvent) {
       manualToken,
     });
 
+    const headers = new Headers();
+    headers.set("Content-Type", "application/json");
+    headers.set("Cache-Control", "no-store, max-age=0, must-revalidate");
+
+    if (manualToken && data.user) {
+      const sessionCookie = createSignedSessionCookie({
+        email: data.user.email,
+        name: data.user.name,
+        picture: data.user.picture,
+        accessToken: manualToken,
+        expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+      });
+      headers.set("Set-Cookie", sessionCookie);
+    }
+
     return new Response(JSON.stringify(data), {
       status: 200,
-      headers: {
-        "Content-Type": "application/json",
-        "Cache-Control": "no-store, max-age=0, must-revalidate",
-      },
+      headers,
     });
   } catch (err: any) {
     const message = err?.message || "Failed to retrieve quota data from server";

@@ -258,10 +258,16 @@ export async function fetchUnifiedQuotaData(options: FetchQuotaOptions = {}): Pr
     }
     tokenUserEmail = tokenCheck.email;
 
+    const tokenForProfile = tokenCheck.resolvedToken || manualToken;
     try {
-      manualUserProfile = await fetchGoogleUserProfile(manualToken);
+      manualUserProfile = await fetchGoogleUserProfile(tokenForProfile);
     } catch {
-      // Fallback to tokenCheck.email if profile cannot be retrieved
+      if (tokenUserEmail) {
+        manualUserProfile = {
+          email: tokenUserEmail,
+          name: tokenUserEmail.split("@")[0],
+        };
+      }
     }
   }
 
@@ -322,26 +328,17 @@ export async function fetchUnifiedQuotaData(options: FetchQuotaOptions = {}): Pr
     };
   }
 
-  // 2. Fetch live quota from Google Cloud Code API.
-  //
-  // IMPORTANT: cloudcode-pa.googleapis.com is a Google-internal "Private API".
-  // It requires the Antigravity desktop bearer token (which carries the internal
-  // `aicode` scope). Standard web OAuth tokens (cloud-platform scope) will always
-  // receive HTTP 403 — regardless of which GCP project they belong to.
-  //
-  // Therefore we ONLY attempt the live quota call when the user has explicitly
-  // provided a manual desktop bearer token. Session cookie tokens (Google Sign In)
-  // are skipped to avoid 403 noise and unnecessary latency on every page load.
-  if (manualToken) {
+  // 2. Fetch live quota from Google Cloud Code API (both daily and prod endpoints)
+  if (effectiveToken) {
     try {
-      const liveData = await fetchGoogleLiveQuota(manualToken);
+      const liveData = await fetchGoogleLiveQuota(effectiveToken);
       data = {
         ...data,
         ...liveData,
         lastUpdated: new Date().toISOString(),
       };
     } catch (err) {
-      console.warn("[GraviQuota] Live quota fetch failed for manual token:", err);
+      console.warn("[GraviQuota] Live quota fetch failed:", err);
     }
   }
 

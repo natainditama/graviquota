@@ -48,17 +48,50 @@ export const TokenDrawer: Component<TokenDrawerProps> = (props) => {
 
         {/* Content Body */}
         <div class="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+          {/* Quick Script Method */}
+          <Card class="shadow-none border-primary/40 bg-primary/5">
+            <CardHeader class="p-4 space-y-2">
+              <div class="flex items-center justify-between">
+                <CardTitle class="text-sm font-semibold text-primary">Fast Method: 1-Click Script (Recommended)</CardTitle>
+                <Badge variant="outline" round>Automated</Badge>
+              </div>
+              <CardDescription class="text-xs">
+                Run the bundled helper script in your terminal to automatically copy your active Antigravity token directly to your clipboard.
+              </CardDescription>
+            </CardHeader>
+            <CardContent class="p-4 pt-0 space-y-2.5">
+              <div class="space-y-1">
+                <p class="text-xs font-medium text-foreground">Windows (PowerShell):</p>
+                <div class="flex items-center justify-between bg-muted/60 px-3 py-1 rounded-md border border-border font-mono text-xs">
+                  <span class="truncate">powershell -ExecutionPolicy Bypass -File .\scripts\copy-token.ps1</span>
+                  <Button variant="ghost" size="sm" onClick={() => copyText("powershell -ExecutionPolicy Bypass -File .\\scripts\\copy-token.ps1", "script_ps1")}>
+                    {copiedId() === "script_ps1" ? <Check class="size-3.5 text-success-foreground" /> : <Copy class="size-3.5" />}
+                  </Button>
+                </div>
+              </div>
+              <div class="space-y-1">
+                <p class="text-xs font-medium text-foreground">macOS / Linux / Git Bash:</p>
+                <div class="flex items-center justify-between bg-muted/60 px-3 py-1 rounded-md border border-border font-mono text-xs">
+                  <span class="truncate">./scripts/copy-token.sh</span>
+                  <Button variant="ghost" size="sm" onClick={() => copyText("./scripts/copy-token.sh", "script_sh")}>
+                    {copiedId() === "script_sh" ? <Check class="size-3.5 text-success-foreground" /> : <Copy class="size-3.5" />}
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
           {/* Step 1 */}
           <Card class="shadow-none">
             <CardHeader class="p-4">
               <div class="flex items-center justify-start gap-2">
-                <CardTitle>1. Open Google OAuth 2.0 Playground</CardTitle>
+                <CardTitle>Manual Option: Google OAuth Playground</CardTitle>
                 <a href="https://developers.google.com/oauthplayground" target="_blank" rel="noopener noreferrer" class={cn(buttonVariants({ variant: "link" }), "px-0! h-max! underline")}>
                   Open Playground <ExternalLink class="size-3" />
                 </a>
               </div>
               <CardDescription>
-                Visit the official <strong>Google OAuth 2.0 Playground</strong> to authorize and retrieve access tokens for your Google account.
+                Or visit the official <strong>Google OAuth 2.0 Playground</strong> to authorize and retrieve access tokens for your Google account.
               </CardDescription>
             </CardHeader>
           </Card>

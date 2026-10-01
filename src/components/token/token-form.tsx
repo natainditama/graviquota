@@ -22,15 +22,18 @@ export const TokenForm: Component<TokenFormProps> = (props) => {
   const validateTokenFormat = (val: string): string | null => {
     const trimmed = val.trim();
     if (!trimmed) {
-      return "Google Access Token is required";
+      return "Google Access Token or Refresh Token is required";
     }
 
-    if (!trimmed.startsWith("ya29.")) {
-      return "Invalid format. Google OAuth access tokens must start with 'ya29.'";
+    const isAccessToken = trimmed.startsWith("ya29.");
+    const isRefreshToken = trimmed.startsWith("1//");
+
+    if (!isAccessToken && !isRefreshToken) {
+      return "Invalid format. Token must be a Google Access Token ('ya29...') or an Antigravity Refresh Token ('1//...').";
     }
 
-    if (trimmed.length < 30) {
-      return "Token is too short. Please provide a complete Google access token";
+    if (trimmed.length < 25) {
+      return "Token is too short. Please provide a complete Google token.";
     }
 
     return null;
@@ -77,9 +80,7 @@ export const TokenForm: Component<TokenFormProps> = (props) => {
               <span>Get Token</span>
             </Button>
           </div>
-          <CardDescription>
-            Provide an active access_token from your local Antigravity environment or OAuth session to check limits directly.
-          </CardDescription>
+          <CardDescription>Provide an active access_token from your local Antigravity environment or OAuth session to check limits directly.</CardDescription>
         </CardHeader>
 
         <form onSubmit={handleSubmit}>
@@ -97,10 +98,10 @@ export const TokenForm: Component<TokenFormProps> = (props) => {
               }
             >
               <TextField validationState={validationError() ? "invalid" : "valid"}>
-                <TextFieldLabel>Google Bearer Token</TextFieldLabel>
+                <TextFieldLabel>Google Bearer or Refresh Token</TextFieldLabel>
                 <TextFieldInput
                   type="password"
-                  placeholder="ya29.a0Ac.."
+                  placeholder="ya29.a0Ac... or 1//0e..."
                   value={token()}
                   onInput={(e) => {
                     setToken(e.currentTarget.value);
@@ -111,7 +112,7 @@ export const TokenForm: Component<TokenFormProps> = (props) => {
                   <TextFieldErrorMessage>{validationError()}</TextFieldErrorMessage>
                 </Show>
                 <Show when={!validationError()}>
-                  <TextFieldDescription>Google OAuth tokens start with &ldquo;ya29.&rdquo; and verify directly against Google.</TextFieldDescription>
+                  <TextFieldDescription>Enter your Antigravity Access Token (&ldquo;ya29...&rdquo;) or permanent Refresh Token (&ldquo;1//...&rdquo;).</TextFieldDescription>
                 </Show>
               </TextField>
             </Show>
