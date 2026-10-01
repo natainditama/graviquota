@@ -120,196 +120,256 @@ export async function validateGoogleAccessToken(accessToken: string): Promise<{ 
 }
 
 /**
+ * Attempt one HTTP call to a Cloud Code Assist endpoint.
+ * Returns parsed JSON body on HTTP 200, or null with a WARN log on any failure.
+ * All failures are always logged at WARN level so they appear in Vercel logs.
+ */
+async function trySingleApiRequest(label: string, url: string, headers: Record<string, string>, body: string): Promise<any | null> {
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers,
+      body,
+      signal: AbortSignal.timeout(8000),
+    });
+
+    if (res.ok) {
+      const parsed = await res.json().catch((err: any) => {
+        console.warn(`[GraviQuota] ${label} JSON parse error at ${url}:`, err?.message);
+        return null;
+      });
+      return parsed;
+    }
+
+    const errText = await res.text().catch(() => "(unreadable)");
+    console.warn(`[GraviQuota] ${label} HTTP ${res.status} at ${url}: ${errText.slice(0, 300)}`);
+    return null;
+  } catch (err: any) {
+    console.warn(`[GraviQuota] ${label} network error at ${url}: ${err?.message}`);
+    return null;
+  }
+}
+
+/**
  * Fetch real Antigravity / Gemini Code Assist quota using a Google Bearer access token.
+ *
+ * Strategy:
+ *   1. loadCodeAssist — detect user plan tier and companion project ID
+ *   2. retrieveUserQuotaSummary — read remaining quota fraction per model group
+ *   3. Return structured QuotaData; fall back to honest 0% if API is inaccessible
+ *
+ * We try multiple endpoint hosts, API path formats, and request body formats to
+ * maximise compatibility across Antigravity IDE API versions.
  */
 export async function fetchGoogleLiveQuota(accessToken: string): Promise<Partial<QuotaData>> {
-  // Default tier values used when loadCodeAssist returns no tier info
   let currentTierName = "Google AI Pro";
   let currentTierDescription = "You can upgrade to a Google AI Ultra plan to receive higher rate limits.";
   let upgradeUrl = "https://one.google.com/explore-plan/ai-premium";
   let upgradeBtnText = "Upgrade";
-
-  // The companionProject is required by some endpoints to retrieve per-account quota
   let companionProject: string | undefined = undefined;
 
-  // Antigravity IDE queries these endpoints in this priority order
-  const apiEndpoints = ["https://cloudaicompanion.googleapis.com", "https://daily-cloudcode-pa.googleapis.com", "https://cloudcode-pa.googleapis.com"];
-
-  // HTTP headers matching what the Antigravity IDE client sends
-  const clientHeaders: Record<string, string> = {
+  // Minimal headers required for all Cloud Code Assist API requests.
+  // We intentionally avoid exotic custom headers that might be blocked.
+  const baseHeaders: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
     "Content-Type": "application/json",
-    "User-Agent": "antigravity/1.11.3",
-    "X-Goog-Api-Client": "antigravity/1.11.3 gl-node/22 grpc-node/1.24",
   };
 
-  // Request body matching the Antigravity IDE client metadata format
-  const loadCodeAssistBody = JSON.stringify({
-    metadata: {
-      ideType: "IDE_UNSPECIFIED",
-      platform: "PLATFORM_UNSPECIFIED",
-      pluginType: "PLUGIN_TYPE_UNSPECIFIED",
-      extensionVersion: "1.11.3",
-    },
-    mode: "FULL_ELIGIBILITY_CHECK",
-  });
+  // ---------------------------------------------------------------------------
+  // Step 1: loadCodeAssist — resolve user plan tier + companion project ID
+  //
+  // We try every combination of:
+  //   - API endpoint host  (cloudcode-pa, daily-cloudcode-pa, cloudaicompanion)
+  //   - API path format    (/v1internal:method  vs  /v1:method)
+  //   - Request body       ({} minimal  vs  full metadata object)
+  //
+  // All failures are logged at WARN level so they appear in Vercel function logs.
+  // ---------------------------------------------------------------------------
+  const loadCodeAssistAttempts: Array<{ url: string; body: string }> = [];
 
-  // Step 1: loadCodeAssist — resolve user tier and companion project ID
+  // Build all endpoint × path × body combinations
+  for (const host of ["https://cloudcode-pa.googleapis.com", "https://daily-cloudcode-pa.googleapis.com", "https://cloudaicompanion.googleapis.com"]) {
+    for (const path of ["/v1internal:loadCodeAssist", "/v1:loadCodeAssist"]) {
+      for (const body of [
+        // Minimal body — most permissive
+        "{}",
+        // Full metadata body used by Antigravity IDE
+        JSON.stringify({
+          metadata: {
+            ideType: "ANTIGRAVITY",
+            platform: "LINUX_AMD64",
+            pluginType: "GEMINI",
+            extensionVersion: "1.11.3",
+          },
+          mode: "FULL_ELIGIBILITY_CHECK",
+        }),
+      ]) {
+        loadCodeAssistAttempts.push({ url: `${host}${path}`, body });
+      }
+    }
+  }
+
   let loadCodeAssistSucceeded = false;
 
-  for (const base of apiEndpoints) {
-    try {
-      const res = await fetch(`${base}/v1internal:loadCodeAssist`, {
-        method: "POST",
-        headers: clientHeaders,
-        body: loadCodeAssistBody,
-        signal: AbortSignal.timeout(8000),
+  for (const { url, body } of loadCodeAssistAttempts) {
+    const result = await trySingleApiRequest("loadCodeAssist", url, baseHeaders, body);
+
+    if (result !== null) {
+      // Extract tier from all known response envelope shapes
+      const tier = result.currentTier ?? result.response?.currentTier ?? result.codeAssistTierInfo?.currentTier;
+
+      if (tier) {
+        currentTierName = tier.name ?? tier.tierName ?? currentTierName;
+        currentTierDescription = tier.upgradeSubscriptionText ?? tier.description ?? tier.subtext ?? currentTierDescription;
+        upgradeUrl = tier.upgradeSubscriptionUri ?? tier.upgradeUrl ?? tier.upgradeUri ?? upgradeUrl;
+        upgradeBtnText = tier.upgradeButtonText ?? tier.upgradeText ?? upgradeBtnText;
+      }
+
+      // Companion project ID is required for accurate per-account quota queries
+      companionProject = result.cloudaicompanionProject ?? result.cloudAiCompanionProject ?? result.project ?? result.response?.cloudaicompanionProject ?? result.response?.project ?? undefined;
+
+      // Log success at WARN level so it is always visible in Vercel logs
+      console.warn("[GraviQuota] loadCodeAssist SUCCESS:", {
+        url,
+        tier: currentTierName,
+        companionProject,
+        rawKeys: Object.keys(result),
       });
 
-      if (res.ok) {
-        const body = await res.json();
-
-        // Extract tier from all known response shapes across API versions
-        const tier = body.currentTier ?? body.response?.currentTier ?? body.codeAssistTierInfo?.currentTier;
-
-        if (tier) {
-          currentTierName = tier.name ?? tier.tierName ?? currentTierName;
-          currentTierDescription = tier.upgradeSubscriptionText ?? tier.description ?? tier.subtext ?? currentTierDescription;
-          upgradeUrl = tier.upgradeSubscriptionUri ?? tier.upgradeUrl ?? tier.upgradeUri ?? upgradeUrl;
-          upgradeBtnText = tier.upgradeButtonText ?? tier.upgradeText ?? upgradeBtnText;
-        }
-
-        // Extract the companion project ID required for accurate per-account quota queries
-        companionProject = body.cloudaicompanionProject ?? body.cloudAiCompanionProject ?? body.project ?? body.response?.cloudaicompanionProject ?? body.response?.project ?? undefined;
-
-        console.log("[GraviQuota] loadCodeAssist success:", {
-          endpoint: base,
-          tier: currentTierName,
-          companionProject,
-        });
-
-        loadCodeAssistSucceeded = true;
-        break;
-      } else {
-        const errText = await res.text().catch(() => "");
-        console.warn(`[GraviQuota] loadCodeAssist HTTP ${res.status} at ${base}:`, errText.slice(0, 300));
-      }
-    } catch (err: any) {
-      console.warn(`[GraviQuota] loadCodeAssist network error at ${base}:`, err?.message);
+      loadCodeAssistSucceeded = true;
+      break;
     }
   }
 
-  // Step 2: retrieveUserQuotaSummary — fetch actual quota buckets per model group
-  // We try multiple project ID formats because different API endpoints and
-  // account configurations expect different formats.
+  // ---------------------------------------------------------------------------
+  // Step 2: retrieveUserQuotaSummary — fetch remaining quota buckets
+  //
+  // Same strategy: try all endpoint/path combinations, plus project ID variants.
+  // Log both successes AND 200 OK responses with empty groups at WARN level.
+  // ---------------------------------------------------------------------------
   let parsedGroups: ModelQuotaGroup[] = [];
 
-  // Build all project candidate variants to maximise chance of getting data
-  const projectCandidates: Array<string | undefined> = [];
+  // Build all project ID format variants to pass to the API
+  const projectVariants: Array<string | undefined> = [];
 
   if (companionProject) {
-    const normalized = companionProject.startsWith("projects/") ? companionProject : `projects/${companionProject}`;
-    const bare = companionProject.startsWith("projects/") ? companionProject.slice("projects/".length) : companionProject;
-
-    // Try with-prefix first (most common for cloudaicompanion endpoint)
-    projectCandidates.push(normalized, bare);
+    const withPrefix = companionProject.startsWith("projects/") ? companionProject : `projects/${companionProject}`;
+    const bareId = companionProject.startsWith("projects/") ? companionProject.slice("projects/".length) : companionProject;
+    // Most specific first (with projects/ prefix)
+    projectVariants.push(withPrefix, bareId);
   }
 
-  // Also try without any project (works on some endpoints)
-  projectCandidates.push(undefined);
+  // Also try without a project field — works on some endpoint configurations
+  projectVariants.push(undefined);
 
-  outerLoop: for (const base of apiEndpoints) {
-    for (const project of projectCandidates) {
-      try {
-        const requestBody: Record<string, unknown> = {};
-        if (project) {
-          requestBody.project = project;
-        }
+  const quotaSummaryAttempts: Array<{ url: string; body: string }> = [];
 
-        const res = await fetch(`${base}/v1internal:retrieveUserQuotaSummary`, {
-          method: "POST",
-          headers: clientHeaders,
-          body: JSON.stringify(requestBody),
-          signal: AbortSignal.timeout(8000),
-        });
-
-        if (res.ok) {
-          const body = await res.json();
-
-          // Extract groups from all known response shapes
-          const rawGroups: unknown[] = (body.groups as unknown[]) ?? (body.response?.groups as unknown[]) ?? (body.quotaSummary?.groups as unknown[]) ?? [];
-
-          console.log("[GraviQuota] retrieveUserQuotaSummary:", {
-            endpoint: base,
-            project,
-            groupCount: rawGroups.length,
-            firstGroupSample: rawGroups[0] ? JSON.stringify(rawGroups[0]).slice(0, 400) : "none",
-          });
-
-          if (Array.isArray(rawGroups) && rawGroups.length > 0) {
-            parsedGroups = rawGroups.map((group: any): ModelQuotaGroup => {
-              const rawBuckets: any[] = Array.isArray(group.buckets) ? group.buckets : [];
-
-              const buckets: QuotaBucket[] = rawBuckets.map((b: any): QuotaBucket => {
-                // The API returns remainingFraction as a float in [0.0, 1.0]
-                // Some legacy endpoints use remainingAmount which may be [0, 100] or [0.0, 1.0]
-                let percentage = 0;
-
-                if (typeof b.remainingFraction === "number") {
-                  percentage = Math.round(b.remainingFraction * 100);
-                } else if (typeof b.remainingAmount === "number") {
-                  percentage = b.remainingAmount <= 1.0 ? Math.round(b.remainingAmount * 100) : Math.round(b.remainingAmount);
-                }
-
-                // Clamp to valid range [0, 100]
-                percentage = Math.min(100, Math.max(0, percentage));
-
-                // Build a human-readable description: use API description, fall back to reset time
-                let description: string | undefined = b.description;
-                if (!description && b.resetTime) {
-                  try {
-                    description = `You have used some of your limit, it will fully refresh in ${new Date(b.resetTime).toLocaleString()}.`;
-                  } catch {
-                    description = `Resets at ${b.resetTime}`;
-                  }
-                }
-
-                return {
-                  name: b.displayName ?? b.name ?? "Limit Remaining",
-                  percentageRemaining: percentage,
-                  description,
-                  resetTime: b.resetTime,
-                  isExhausted: percentage <= 0,
-                };
-              });
-
-              const groupName: string = group.displayName ?? group.name ?? "AI Models";
-              const category: "gemini" | "claude_gpt" = groupName.toLowerCase().includes("gemini") ? "gemini" : "claude_gpt";
-
-              return {
-                name: groupName,
-                category,
-                buckets,
-                percentageRemaining: buckets[0]?.percentageRemaining ?? 0,
-                isExhausted: (buckets[0]?.percentageRemaining ?? 0) <= 0,
-              };
-            });
-
-            break outerLoop;
-          }
-        } else {
-          const errText = await res.text().catch(() => "");
-          console.warn(`[GraviQuota] retrieveUserQuotaSummary HTTP ${res.status} at ${base} (project=${project}):`, errText.slice(0, 300));
-        }
-      } catch (err: any) {
-        console.warn(`[GraviQuota] retrieveUserQuotaSummary network error at ${base} (project=${project}):`, err?.message);
+  for (const host of ["https://cloudcode-pa.googleapis.com", "https://daily-cloudcode-pa.googleapis.com", "https://cloudaicompanion.googleapis.com"]) {
+    for (const path of ["/v1internal:retrieveUserQuotaSummary", "/v1:retrieveUserQuotaSummary"]) {
+      for (const project of projectVariants) {
+        const bodyObj: Record<string, unknown> = {};
+        if (project) bodyObj.project = project;
+        quotaSummaryAttempts.push({ url: `${host}${path}`, body: JSON.stringify(bodyObj) });
       }
     }
   }
 
-  // Step 3: Build and return the final structured quota response
+  for (const { url, body } of quotaSummaryAttempts) {
+    const result = await trySingleApiRequest("retrieveUserQuotaSummary", url, baseHeaders, body);
+
+    if (result !== null) {
+      const rawGroups: unknown[] = (result.groups as unknown[]) ?? (result.response?.groups as unknown[]) ?? (result.quotaSummary?.groups as unknown[]) ?? [];
+
+      // Always log the response so we can debug — even when groups is empty
+      console.warn("[GraviQuota] retrieveUserQuotaSummary response:", {
+        url,
+        bodyProject: JSON.parse(body).project ?? "(none)",
+        groupCount: rawGroups.length,
+        rawKeys: Object.keys(result),
+        firstGroup: rawGroups[0] ? JSON.stringify(rawGroups[0]).slice(0, 400) : "(none)",
+      });
+
+      if (Array.isArray(rawGroups) && rawGroups.length > 0) {
+        parsedGroups = rawGroups.map((group: any): ModelQuotaGroup => {
+          const rawBuckets: any[] = Array.isArray(group.buckets) ? group.buckets : [];
+
+          const buckets: QuotaBucket[] = rawBuckets.map((b: any): QuotaBucket => {
+            // remainingFraction is a float [0.0, 1.0] from the Cloud Code API.
+            // Some legacy endpoints use remainingAmount which may be [0, 100] or [0.0, 1.0].
+            let percentage = 0;
+
+            if (typeof b.remainingFraction === "number") {
+              percentage = Math.round(b.remainingFraction * 100);
+            } else if (typeof b.remainingAmount === "number") {
+              percentage = b.remainingAmount <= 1.0 ? Math.round(b.remainingAmount * 100) : Math.round(b.remainingAmount);
+            }
+
+            // Clamp to valid range [0, 100]
+            percentage = Math.min(100, Math.max(0, percentage));
+
+            // Build human-readable reset description from resetTime if no explicit description
+            let description: string | undefined = b.description;
+            if (!description && b.resetTime) {
+              try {
+                const resetDate = new Date(b.resetTime);
+                const now = Date.now();
+                const diffMs = resetDate.getTime() - now;
+                if (diffMs > 0) {
+                  const diffDays = Math.floor(diffMs / 86400000);
+                  const diffHours = Math.floor((diffMs % 86400000) / 3600000);
+                  const diffMins = Math.floor((diffMs % 3600000) / 60000);
+                  const parts: string[] = [];
+                  if (diffDays > 0) parts.push(`${diffDays} day${diffDays !== 1 ? "s" : ""}`);
+                  if (diffHours > 0) parts.push(`${diffHours} hour${diffHours !== 1 ? "s" : ""}`);
+                  if (diffMins > 0 && diffDays === 0) parts.push(`${diffMins} minute${diffMins !== 1 ? "s" : ""}`);
+                  if (parts.length > 0) {
+                    description = `You have used some of your limit, it will fully refresh in ${parts.join(", ")}.`;
+                  }
+                }
+              } catch {
+                description = `Resets at ${b.resetTime}`;
+              }
+            }
+
+            return {
+              name: b.displayName ?? b.name ?? "Limit Remaining",
+              percentageRemaining: percentage,
+              description,
+              resetTime: b.resetTime,
+              isExhausted: percentage <= 0,
+            };
+          });
+
+          const groupName: string = group.displayName ?? group.name ?? "AI Models";
+          const category: "gemini" | "claude_gpt" = groupName.toLowerCase().includes("gemini") ? "gemini" : "claude_gpt";
+
+          return {
+            name: groupName,
+            category,
+            buckets,
+            percentageRemaining: buckets[0]?.percentageRemaining ?? 0,
+            isExhausted: (buckets[0]?.percentageRemaining ?? 0) <= 0,
+          };
+        });
+
+        console.warn("[GraviQuota] Quota groups parsed successfully:", {
+          url,
+          groupCount: parsedGroups.length,
+          gemini: parsedGroups.find((g) => g.category === "gemini")?.buckets?.[0]?.percentageRemaining,
+          claudeGpt: parsedGroups.find((g) => g.category === "claude_gpt")?.buckets?.[0]?.percentageRemaining,
+        });
+
+        break;
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Step 3: Build the final structured quota response
+  // ---------------------------------------------------------------------------
+
   if (parsedGroups.length > 0) {
-    // Real live quota data fetched successfully
+    // ✅ Real live quota data — return it directly
     const geminiGroup = parsedGroups.find((g) => g.category === "gemini") ?? parsedGroups[0];
     const claudeGroup = parsedGroups.find((g) => g.category === "claude_gpt") ?? parsedGroups[1] ?? parsedGroups[0];
 
@@ -343,20 +403,18 @@ export async function fetchGoogleLiveQuota(accessToken: string): Promise<Partial
     };
   }
 
-  // ⚠️ Fallback: authenticated but no quota groups returned.
+  // ⚠️ Fallback: authenticated but no quota groups returned from any endpoint.
   //
-  // This happens because:
-  //   - The Google OAuth token (cloud-platform scope) does not have the internal
-  //     "aicode" scope that the Antigravity IDE desktop client uses. The quota
-  //     summary endpoint may silently return empty groups for web OAuth tokens.
-  //   - The companionProject may not have been discovered, so the API cannot
-  //     associate the request with the correct billing/quota account.
+  // Possible reasons:
+  //   1. All Cloud Code API paths returned non-200 (endpoint changed / access denied)
+  //   2. The API returned HTTP 200 but groups array was empty
+  //   3. The Google OAuth web token lacks internal scopes required by the quota API
   //
-  // We intentionally return 0% rather than fabricating 100% — an honest "unknown"
-  // state is always preferable to a misleading full-quota indicator.
+  // We intentionally do NOT fabricate percentages. 0% + honest description is
+  // always better than misleading users with synthetic 100% or silent wrong data.
   const fallbackDescription = loadCodeAssistSucceeded
-    ? "Live quota counters require the Antigravity desktop client bearer token. Your plan tier was detected, but per-model usage data is not accessible via Google OAuth web flow."
-    : "Unable to reach the Google Cloud Code API. Check that your token has the cloud-platform scope and that network access to googleapis.com is available.";
+    ? "Your plan tier was detected but per-model usage counters are not accessible via Google web sign-in. For live quota data, open the Antigravity desktop client and paste your bearer token into the manual token field."
+    : "The Antigravity quota API is unreachable. Ensure your network can access cloudcode-pa.googleapis.com and that your token includes the cloud-platform scope. Alternatively, use the manual desktop bearer token option.";
 
   return {
     planName: currentTierName,
