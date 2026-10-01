@@ -86,13 +86,24 @@ export const TokenDrawer: Component<TokenDrawerProps> = (props) => {
                 </div>
 
                 <div class="space-y-2">
-                  <p class="font-medium text-foreground text-sm">2. In &ldquo;Input your own scopes&rdquo;, enter the Cloud Platform scope:</p>
-                  <div class="flex items-center justify-between bg-muted/50 px-3 py-2 rounded-md border border-border font-mono text-xs">
-                    <span class="truncate">https://www.googleapis.com/auth/cloud-platform</span>
-                    <Button variant="ghost" size="sm" onClick={() => copyText("https://www.googleapis.com/auth/cloud-platform", "cloud_scope")}>
-                      {copiedId() === "cloud_scope" ? <Check class="size-3.5 text-success-foreground" /> : <Copy class="size-3.5" />}
-                    </Button>
+                  <p class="font-medium text-foreground text-sm">2. In &ldquo;Input your own scopes&rdquo;, enter the Antigravity API scopes:</p>
+                  <div class="space-y-1.5">
+                    <div class="flex items-center justify-between bg-muted/50 px-3 py-2 rounded-md border border-border font-mono text-xs">
+                      <span class="truncate">https://www.googleapis.com/auth/cloud-platform</span>
+                      <Button variant="ghost" size="sm" onClick={() => copyText("https://www.googleapis.com/auth/cloud-platform", "cloud_scope")}>
+                        {copiedId() === "cloud_scope" ? <Check class="size-3.5 text-success-foreground" /> : <Copy class="size-3.5" />}
+                      </Button>
+                    </div>
+                    <div class="flex items-center justify-between bg-muted/50 px-3 py-2 rounded-md border border-border font-mono text-xs">
+                      <span class="truncate">https://www.googleapis.com/auth/aicode</span>
+                      <Button variant="ghost" size="sm" onClick={() => copyText("https://www.googleapis.com/auth/aicode", "aicode_scope")}>
+                        {copiedId() === "aicode_scope" ? <Check class="size-3.5 text-success-foreground" /> : <Copy class="size-3.5" />}
+                      </Button>
+                    </div>
                   </div>
+                  <p class="text-xs text-muted-foreground">
+                    Tip: The <code class="font-mono text-foreground bg-muted/70 px-1 py-0.5 rounded">aicode</code> scope authorizes access to Google Code Assist &amp; Antigravity quota rate limits.
+                  </p>
                 </div>
 
                 <div class="text-sm text-muted-foreground pt-1">
