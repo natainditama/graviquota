@@ -29,7 +29,12 @@ const envSchema = z.object({
   SKIP_ENV_VALIDATION: z.string().optional().default("false"),
 });
 
-const _parseEnv = () => {
+export type Env = z.infer<typeof envSchema>;
+
+/**
+ * Validate and parse server runtime environment configuration
+ */
+export function validateServerEnvironmentConfig(): Env {
   const resolvedAppUrl = process.env.APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
 
   const values = {
@@ -43,7 +48,7 @@ const _parseEnv = () => {
   };
 
   if (process.env.SKIP_ENV_VALIDATION === "true" || process.env.NODE_ENV === "test") {
-    return values as z.infer<typeof envSchema>;
+    return values as Env;
   }
 
   const parsed = envSchema.safeParse(values);
@@ -53,10 +58,8 @@ const _parseEnv = () => {
   }
 
   return parsed.data;
-};
+}
 
-export const env = _parseEnv();
-export type Env = z.infer<typeof envSchema>;
-
+export const env = validateServerEnvironmentConfig();
 export const isProduction = env.NODE_ENV === "production";
 export const isGoogleConfigured = Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);

@@ -3,7 +3,8 @@
 import { getRequestEvent } from "solid-js/web";
 import { type QuotaData, type ModelQuotaGroup, type QuotaBucket, DEFAULT_QUOTA } from "~/types/quota";
 import { getSessionFromRequest } from "~/lib/cookie";
-import { fetchGoogleLiveQuota, validateGoogleAccessToken } from "~/lib/auth";
+import { fetchGoogleLiveQuota, validateGoogleAccessToken, fetchGoogleUserProfile } from "~/lib/auth";
+import { compareUserAccountEmails } from "~/lib/utils";
 
 export interface FetchQuotaOptions {
   request?: any;
@@ -247,6 +248,7 @@ export async function fetchUnifiedQuotaData(options: FetchQuotaOptions = {}): Pr
   const manualToken = options.manualToken?.trim();
 
   let tokenUserEmail: string | undefined;
+  let manualUserProfile: { email: string; name: string; picture?: string } | null = null;
 
   // Validate manual token if provided
   if (manualToken) {
@@ -255,44 +257,73 @@ export async function fetchUnifiedQuotaData(options: FetchQuotaOptions = {}): Pr
       throw new Error(tokenCheck.error || "Invalid or expired Google access token.");
     }
     tokenUserEmail = tokenCheck.email;
+
+    try {
+      manualUserProfile = await fetchGoogleUserProfile(manualToken);
+    } catch {
+      // Fallback to tokenCheck.email if profile cannot be retrieved
+    }
   }
 
+  // Determine online authenticated user email
+  const onlineUserEmail = session?.email || manualUserProfile?.email || tokenUserEmail;
+  const isOnlineAuthenticated = Boolean(onlineUserEmail);
   const effectiveToken = manualToken || session?.accessToken;
 
   let data: QuotaData = {
     ...DEFAULT_QUOTA,
     lastUpdated: new Date().toISOString(),
-    isAuthenticated: Boolean(session || manualToken),
+    isAuthenticated: isOnlineAuthenticated,
     user: session
       ? {
           email: session.email,
           name: session.name,
           picture: session.picture,
         }
-      : tokenUserEmail
+      : manualUserProfile
         ? {
-            email: tokenUserEmail,
-            name: tokenUserEmail.split("@")[0],
+            email: manualUserProfile.email,
+            name: manualUserProfile.name,
+            picture: manualUserProfile.picture,
           }
-        : null,
+        : tokenUserEmail
+          ? {
+              email: tokenUserEmail,
+              name: tokenUserEmail.split("@")[0],
+            }
+          : null,
   };
 
-  // 1. Try local Antigravity Language Server first (instant & exact when Antigravity is open)
+  // 1. Inspect local Antigravity Language Server (running on host IDE)
   const localServerInfo = await discoverLocalAntigravityServer();
+  let localData: Partial<QuotaData> | null = null;
   if (localServerInfo) {
-    const localData = await fetchLocalAntigravityQuota(localServerInfo);
-    if (localData) {
-      return {
-        ...data,
-        ...localData,
-        lastUpdated: new Date().toISOString(),
-        user: data.user || localData.user || null,
-        isAuthenticated: Boolean(data.user || localData.user || session || manualToken),
-      };
-    }
+    localData = await fetchLocalAntigravityQuota(localServerInfo);
   }
 
-  // 2. Fallback to Google Cloud Code API via Bearer token
+  // Account Matching Validation:
+  // If the user has authenticated online with Email A, we MUST verify that the local
+  // Antigravity server also belongs to Email A. If the local server belongs to
+  // a different account (Email B), the local data MUST NOT appear!
+  const isLocalAccountMatched = Boolean(localData?.user?.email && onlineUserEmail && compareUserAccountEmails(localData.user.email, onlineUserEmail));
+
+  // Local server data should only be used when:
+  // - The user is not signed in online (unauthenticated local desktop preview), OR
+  // - The online account strictly matches the local Antigravity server account
+  const shouldUseLocalServer = Boolean(localData && (!isOnlineAuthenticated || isLocalAccountMatched));
+
+  if (shouldUseLocalServer && localData) {
+    return {
+      ...data,
+      ...localData,
+      lastUpdated: new Date().toISOString(),
+      user: data.user || localData.user || null,
+      isAuthenticated: Boolean(data.user || localData.user || isOnlineAuthenticated),
+    };
+  }
+
+  // 2. Fetch live quota online from Google Cloud Code API for the authenticated account (Email A)
+  // whenever local server is unavailable or belongs to a different email (Email B)
   if (effectiveToken) {
     try {
       const liveData = await fetchGoogleLiveQuota(effectiveToken);
