@@ -42,7 +42,9 @@ export const TokenForm: Component<TokenFormProps> = (props) => {
 
     if (error) {
       setValidationError(error);
-      toast.error(error);
+      toast.error("Invalid token format", {
+        description: error,
+      });
       return;
     }
 
@@ -51,12 +53,16 @@ export const TokenForm: Component<TokenFormProps> = (props) => {
       await props.onApplyToken(token().trim());
 
       setIsSuccess(true);
-      toast.success("Token verified and quota refreshed successfully!");
+      toast.success("Token verified successfully", {
+        description: "Your Google access token has been verified and your real-time model quota data has been refreshed.",
+      });
       setTimeout(() => setIsSuccess(false), 3000);
     } catch (err: any) {
-      const msg = err?.message || "Token verification failed. Please check that the token is valid and active";
+      const msg = err?.message || "Token verification failed. Please check that the token is valid and active.";
       setValidationError(msg);
-      toast.error(msg);
+      toast.error("Token verification failed", {
+        description: msg,
+      });
     }
   };
 

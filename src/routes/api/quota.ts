@@ -20,12 +20,18 @@ export async function GET(event: APIEvent) {
       },
     });
   } catch (err: any) {
-    const message = err?.message || "Failed to retrieve quota data";
+    const message = err?.message || "Failed to retrieve quota data from server";
     const isValidationError = message.toLowerCase().includes("token") || message.toLowerCase().includes("expired") || message.toLowerCase().includes("invalid");
 
     return new Response(
       JSON.stringify({
+        success: false,
         error: message,
+        code: isValidationError ? "INVALID_ACCESS_TOKEN" : "QUOTA_SERVICE_UNAVAILABLE",
+        details: isValidationError
+          ? "The provided Google access token is invalid, expired, or rejected by Google OAuth. Please generate a fresh token and try again."
+          : "An unexpected error occurred while communicating with the quota service. Verify server connectivity and try again.",
+        timestamp: new Date().toISOString(),
       }),
       {
         status: isValidationError ? 401 : 500,
@@ -39,11 +45,20 @@ export async function GET(event: APIEvent) {
 }
 
 export async function POST() {
-  return new Response(JSON.stringify({ error: "Method Not Allowed. Use GET to query quota data." }), {
-    status: 405,
-    headers: {
-      "Content-Type": "application/json",
-      Allow: "GET",
+  return new Response(
+    JSON.stringify({
+      success: false,
+      error: "Method Not Allowed. Use GET to query quota data.",
+      code: "METHOD_NOT_ALLOWED",
+      details: "The /api/quota endpoint accepts only HTTP GET requests with optional Bearer authorization headers.",
+      timestamp: new Date().toISOString(),
+    }),
+    {
+      status: 405,
+      headers: {
+        "Content-Type": "application/json",
+        Allow: "GET",
+      },
     },
-  });
+  );
 }

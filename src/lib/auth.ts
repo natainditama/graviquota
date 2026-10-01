@@ -140,6 +140,7 @@ export async function fetchGoogleLiveQuota(accessToken: string): Promise<Partial
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
           "User-Agent": "antigravity/1.11.3",
+          "X-Goog-Api-Client": "antigravity/1.11.3",
         },
         body: JSON.stringify({
           metadata: {
@@ -147,6 +148,7 @@ export async function fetchGoogleLiveQuota(accessToken: string): Promise<Partial
             platform: "WINDOWS_AMD64",
             pluginType: "GEMINI",
           },
+          mode: "FULL_ELIGIBILITY_CHECK",
         }),
         signal: AbortSignal.timeout(8000),
       });
@@ -172,123 +174,136 @@ export async function fetchGoogleLiveQuota(accessToken: string): Promise<Partial
 
   // 2. Query Quota Summary buckets from retrieveUserQuotaSummary
   let parsedGroups: ModelQuotaGroup[] = [];
+  const projectCandidates = companionProject ? [companionProject.startsWith("projects/") ? companionProject : `projects/${companionProject}`, companionProject, undefined] : [undefined];
 
   for (const base of endpoints) {
-    try {
-      const res = await fetch(`${base}/v1internal:retrieveUserQuotaSummary`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-          "User-Agent": "antigravity/1.11.3",
-        },
-        body: JSON.stringify({
-          project: companionProject,
-        }),
-        signal: AbortSignal.timeout(8000),
-      });
-
-      if (res.ok) {
-        const body = await res.json();
-        const rawGroups = body.response?.groups || body.groups;
-        if (Array.isArray(rawGroups) && rawGroups.length > 0) {
-          parsedGroups = rawGroups.map((group: any) => {
-            const rawBuckets = Array.isArray(group.buckets) ? group.buckets : [];
-            const buckets: QuotaBucket[] = rawBuckets.map((b: any) => {
-              const fraction = typeof b.remainingFraction === "number" ? b.remainingFraction : b.remainingAmount != null ? b.remainingAmount : 0;
-              const percentage = Math.round(fraction * 100);
-
-              return {
-                name: b.displayName || "Limit Remaining",
-                percentageRemaining: percentage,
-                description: b.description,
-                resetTime: b.resetTime,
-                isExhausted: percentage <= 0,
-              };
-            });
-
-            return {
-              name: group.displayName || "AI Models",
-              category: (group.displayName || "").toLowerCase().includes("gemini") ? "gemini" : "claude_gpt",
-              buckets,
-              percentageRemaining: buckets[0]?.percentageRemaining ?? 0,
-              isExhausted: (buckets[0]?.percentageRemaining ?? 0) <= 0,
-            };
-          });
-          break;
-        }
-      }
-    } catch {
-      // Continue to next endpoint fallback
-    }
-  }
-
-  // 3. Fallback to fetchAvailableModels if retrieveUserQuotaSummary was empty
-  if (parsedGroups.length === 0) {
-    for (const base of endpoints) {
+    for (const proj of projectCandidates) {
       try {
-        const res = await fetch(`${base}/v1internal:fetchAvailableModels`, {
+        const bodyPayload = proj ? { project: proj } : {};
+        const res = await fetch(`${base}/v1internal:retrieveUserQuotaSummary`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${accessToken}`,
             "Content-Type": "application/json",
             "User-Agent": "antigravity/1.11.3",
+            "X-Goog-Api-Client": "antigravity/1.11.3",
           },
-          body: JSON.stringify({
-            project: companionProject,
-          }),
+          body: JSON.stringify(bodyPayload),
           signal: AbortSignal.timeout(8000),
         });
 
         if (res.ok) {
           const body = await res.json();
-          const rawModels = body.models || body.response?.models;
-          if (Array.isArray(rawModels) && rawModels.length > 0) {
-            const geminiModels = rawModels.filter((m: any) => (m.label || m.modelId || "").toLowerCase().includes("gemini"));
-            const claudeModels = rawModels.filter((m: any) => !(m.label || m.modelId || "").toLowerCase().includes("gemini"));
+          const rawGroups = body.response?.groups || body.groups;
+          if (Array.isArray(rawGroups) && rawGroups.length > 0) {
+            parsedGroups = rawGroups.map((group: any) => {
+              const rawBuckets = Array.isArray(group.buckets) ? group.buckets : [];
+              const buckets: QuotaBucket[] = rawBuckets.map((b: any) => {
+                const fraction = typeof b.remainingFraction === "number" ? b.remainingFraction : b.remainingAmount != null ? b.remainingAmount : 0;
+                // Normalize fraction: if already percentage (e.g. 61), keep it; if fractional (e.g. 0.61), scale to 100
+                const percentage = fraction <= 1 && fraction > 0 ? Math.round(fraction * 100) : Math.round(fraction);
 
-            const firstGemini = geminiModels[0]?.quotaInfo;
-            const firstClaude = claudeModels[0]?.quotaInfo;
+                return {
+                  name: b.displayName || "Limit Remaining",
+                  percentageRemaining: percentage,
+                  description: b.description,
+                  resetTime: b.resetTime,
+                  isExhausted: percentage <= 0,
+                };
+              });
 
-            const geminiFraction = firstGemini ? (firstGemini.remainingFraction ?? 0) : 0;
-            const claudeFraction = firstClaude ? (firstClaude.remainingFraction ?? 0) : 0;
-
-            parsedGroups = [
-              {
-                name: "Gemini Models",
-                category: "gemini",
-                buckets: [
-                  {
-                    name: "Weekly Limit Remaining",
-                    percentageRemaining: Math.round(geminiFraction * 100),
-                    resetTime: firstGemini?.resetTime,
-                    isExhausted: geminiFraction <= 0,
-                  },
-                ],
-                percentageRemaining: Math.round(geminiFraction * 100),
-                isExhausted: geminiFraction <= 0,
-              },
-              {
-                name: "Claude and GPT models",
-                category: "claude_gpt",
-                buckets: [
-                  {
-                    name: "Weekly Limit Remaining",
-                    percentageRemaining: Math.round(claudeFraction * 100),
-                    resetTime: firstClaude?.resetTime,
-                    isExhausted: claudeFraction <= 0,
-                  },
-                ],
-                percentageRemaining: Math.round(claudeFraction * 100),
-                isExhausted: claudeFraction <= 0,
-              },
-            ];
+              return {
+                name: group.displayName || "AI Models",
+                category: (group.displayName || "").toLowerCase().includes("gemini") ? "gemini" : "claude_gpt",
+                buckets,
+                percentageRemaining: buckets[0]?.percentageRemaining ?? 0,
+                isExhausted: (buckets[0]?.percentageRemaining ?? 0) <= 0,
+              };
+            });
             break;
           }
         }
       } catch {
-        // Fallback
+        // Continue to next candidate
       }
+    }
+    if (parsedGroups.length > 0) break;
+  }
+
+  // 3. Fallback to fetchAvailableModels if retrieveUserQuotaSummary was empty
+  if (parsedGroups.length === 0) {
+    for (const base of endpoints) {
+      for (const proj of projectCandidates) {
+        try {
+          const bodyPayload = proj ? { project: proj } : {};
+          const res = await fetch(`${base}/v1internal:fetchAvailableModels`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Type": "application/json",
+              "User-Agent": "antigravity/1.11.3",
+              "X-Goog-Api-Client": "antigravity/1.11.3",
+            },
+            body: JSON.stringify(bodyPayload),
+            signal: AbortSignal.timeout(8000),
+          });
+
+          if (res.ok) {
+            const body = await res.json();
+            const rawModels = body.models || body.response?.models;
+            if (Array.isArray(rawModels) && rawModels.length > 0) {
+              const geminiModels = rawModels.filter((m: any) => (m.label || m.modelId || "").toLowerCase().includes("gemini"));
+              const claudeModels = rawModels.filter((m: any) => !(m.label || m.modelId || "").toLowerCase().includes("gemini"));
+
+              const firstGemini = geminiModels[0]?.quotaInfo;
+              const firstClaude = claudeModels[0]?.quotaInfo;
+
+              const geminiFraction = firstGemini ? (firstGemini.remainingFraction ?? 0) : 0;
+              const claudeFraction = firstClaude ? (firstClaude.remainingFraction ?? 0) : 0;
+
+              const geminiPct = geminiFraction <= 1 && geminiFraction > 0 ? Math.round(geminiFraction * 100) : Math.round(geminiFraction);
+              const claudePct = claudeFraction <= 1 && claudeFraction > 0 ? Math.round(claudeFraction * 100) : Math.round(claudeFraction);
+
+              parsedGroups = [
+                {
+                  name: "Gemini Models",
+                  category: "gemini",
+                  buckets: [
+                    {
+                      name: "Weekly Limit Remaining",
+                      percentageRemaining: geminiPct,
+                      description: "Online model rate limit retrieved from Google Cloud Code API.",
+                      resetTime: firstGemini?.resetTime,
+                      isExhausted: geminiPct <= 0,
+                    },
+                  ],
+                  percentageRemaining: geminiPct,
+                  isExhausted: geminiPct <= 0,
+                },
+                {
+                  name: "Claude and GPT models",
+                  category: "claude_gpt",
+                  buckets: [
+                    {
+                      name: "Weekly Limit Remaining",
+                      percentageRemaining: claudePct,
+                      description: "Online model rate limit retrieved from Google Cloud Code API.",
+                      resetTime: firstClaude?.resetTime,
+                      isExhausted: claudePct <= 0,
+                    },
+                  ],
+                  percentageRemaining: claudePct,
+                  isExhausted: claudePct <= 0,
+                },
+              ];
+              break;
+            }
+          }
+        } catch {
+          // Fallback
+        }
+      }
+      if (parsedGroups.length > 0) break;
     }
   }
 
@@ -331,10 +346,15 @@ export async function fetchGoogleLiveQuota(accessToken: string): Promise<Partial
     };
   }
 
-  // Fallback state for authenticated user if groups response was unavailable
+  // Fallback state for online authenticated account when Google Cloud Code PA returns no enterprise buckets:
+  // Personal Google AI Pro plans manage rolling 5-hour and weekly limits through the Antigravity desktop IDE client.
+  const personalAccountSubtext = isProOrUltra
+    ? "Your Google AI Pro plan is active. Personal plan limits are tracked in real time via the Antigravity desktop IDE. Run GraviQuota on your machine with Antigravity open to synchronize live rolling counters."
+    : currentTierDescription;
+
   return {
     planName: currentTierName,
-    planSubtext: currentTierDescription,
+    planSubtext: personalAccountSubtext,
     upgradeUrl,
     upgradeButtonText: upgradeBtnText,
     credits: isProOrUltra
@@ -355,6 +375,7 @@ export async function fetchGoogleLiveQuota(accessToken: string): Promise<Partial
         {
           name: "Weekly Limit Remaining",
           percentageRemaining: 0,
+          description: "Online account connected. Rolling 5-hour and weekly limits for personal Google AI plans are synchronized through the Antigravity desktop client.",
           isExhausted: false,
         },
       ],
@@ -369,6 +390,7 @@ export async function fetchGoogleLiveQuota(accessToken: string): Promise<Partial
         {
           name: "Weekly Limit Remaining",
           percentageRemaining: 0,
+          description: "Online account connected. Rolling limits for Claude and GPT models are synchronized through the Antigravity desktop client.",
           isExhausted: true,
           resetTimeText: "Resets in 3h 35m",
         },

@@ -81,11 +81,20 @@ export async function GET(event: APIEvent) {
 }
 
 export async function POST() {
-  return new Response(JSON.stringify({ error: "Method Not Allowed. Use GET for OAuth callback." }), {
-    status: 405,
-    headers: {
-      "Content-Type": "application/json",
-      Allow: "GET",
+  return new Response(
+    JSON.stringify({
+      success: false,
+      error: "Method Not Allowed. Use GET for OAuth callback.",
+      code: "METHOD_NOT_ALLOWED",
+      details: "Google OAuth redirection arrives as an HTTP GET request with authorization code in query parameters.",
+      timestamp: new Date().toISOString(),
+    }),
+    {
+      status: 405,
+      headers: {
+        "Content-Type": "application/json",
+        Allow: "GET",
+      },
     },
-  });
+  );
 }

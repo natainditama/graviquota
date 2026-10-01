@@ -18,7 +18,9 @@ export const SetupDrawer: Component<SetupDrawerProps> = (props) => {
   const copyText = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
     setCopiedId(id);
-    toast.success("Copied to clipboard!");
+    toast.success("Copied to clipboard", {
+      description: "The configuration value has been successfully copied to your clipboard.",
+    });
     setTimeout(() => setCopiedId(null), 2000);
   };
 

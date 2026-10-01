@@ -47,15 +47,20 @@ export default function Home() {
       await fetch("/api/auth/logout", { method: "POST" });
       setManualToken(null);
       setClientQuota(DEFAULT_QUOTA);
-      toast.success("Successfully signed out of Google account.");
+
+      toast.success("Signed out successfully", {
+        description: "Your Google session has been terminated and session cookies have been cleared.",
+      });
       await loadQuota();
     } catch (e) {
       console.error("Logout error:", e);
-      toast.error("Failed to sign out.");
+      toast.error("Sign out encountered an error", {
+        description: "Unable to complete sign out with the server. Please clear your browser cookies if the session persists.",
+      });
     }
   };
 
-  const loadQuota = async (customToken?: string) => {
+  const loadQuota = async (customToken?: string, notifyOnSuccess = false) => {
     try {
       setIsMutating(true);
       const headers: Record<string, string> = {};
@@ -68,9 +73,21 @@ export default function Home() {
       if (res.ok) {
         const data: QuotaData = await res.json();
         setClientQuota(data);
+
+        if (notifyOnSuccess) {
+          toast.success("Quota refreshed successfully", {
+            description: "Real-time rate limits and reset countdowns have been synchronized with your account.",
+          });
+        }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `HTTP ${res.status}: Failed to load quota`);
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error("Error loading quota:", e);
+      toast.error("Failed to refresh quota", {
+        description: e?.message || "Unable to retrieve quota data from the server. Please verify your connection or token.",
+      });
     } finally {
       setIsMutating(false);
     }
@@ -99,7 +116,9 @@ export default function Home() {
   const handleResetQuota = () => {
     setManualToken(null);
     setClientQuota(DEFAULT_QUOTA);
-    toast.info("Quota data reset to default.");
+    toast.info("Quota reset to default", {
+      description: "Active token and session overrides were cleared. Quota view has returned to default state.",
+    });
   };
 
   return (
@@ -131,8 +150,7 @@ export default function Home() {
         </div>
 
         <div class="text-left mx-auto space-y-7">
-          <UsageCard quotaData={currentQuota()} isLoading={isMutating()} onRefresh={() => loadQuota()} onClose={handleResetQuota} />
-
+          <UsageCard quotaData={currentQuota()} isLoading={isMutating()} onRefresh={() => loadQuota(undefined, true)} onClose={handleResetQuota} />
           <TokenForm onApplyToken={handleApplyManualToken} isLoading={isMutating()} />
         </div>
       </main>

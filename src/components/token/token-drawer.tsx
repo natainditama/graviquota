@@ -18,7 +18,9 @@ export const TokenDrawer: Component<TokenDrawerProps> = (props) => {
   const copyText = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
     setCopiedId(id);
-    toast.success("Copied to clipboard!");
+    toast.success("Copied to clipboard", {
+      description: "The requested OAuth parameter has been copied to your clipboard.",
+    });
     setTimeout(() => setCopiedId(null), 2000);
   };
 

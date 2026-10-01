@@ -11,10 +11,19 @@ export async function POST(event: APIEvent) {
   headers.append("Set-Cookie", sessionCookie);
   headers.append("Set-Cookie", stateCookie);
 
-  return new Response(JSON.stringify({ success: true, message: "Logged out successfully." }), {
-    status: 200,
-    headers,
-  });
+  return new Response(
+    JSON.stringify({
+      success: true,
+      message: "Successfully signed out of Google account session.",
+      code: "LOGOUT_SUCCESS",
+      details: "Session cookies have been invalidated and authentication state cleared.",
+      timestamp: new Date().toISOString(),
+    }),
+    {
+      status: 200,
+      headers,
+    },
+  );
 }
 
 export async function GET(event: APIEvent) {
@@ -34,11 +43,20 @@ export async function GET(event: APIEvent) {
 }
 
 export async function PUT() {
-  return new Response(JSON.stringify({ error: "Method Not Allowed. Use POST or GET to log out." }), {
-    status: 405,
-    headers: {
-      "Content-Type": "application/json",
-      Allow: "GET, POST",
+  return new Response(
+    JSON.stringify({
+      success: false,
+      error: "Method Not Allowed. Use POST or GET to log out.",
+      code: "METHOD_NOT_ALLOWED",
+      details: "The logout endpoint accepts HTTP POST (for API fetch) or HTTP GET (for browser redirection).",
+      timestamp: new Date().toISOString(),
+    }),
+    {
+      status: 405,
+      headers: {
+        "Content-Type": "application/json",
+        Allow: "GET, POST",
+      },
     },
-  });
+  );
 }
