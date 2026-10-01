@@ -120,245 +120,211 @@ export async function validateGoogleAccessToken(accessToken: string): Promise<{ 
 }
 
 /**
- * Fetch real Antigravity / Gemini Code Assist Quota using Google Bearer token
+ * Fetch real Antigravity / Gemini Code Assist quota using a Google Bearer access token.
  */
 export async function fetchGoogleLiveQuota(accessToken: string): Promise<Partial<QuotaData>> {
+  // Default tier values used when loadCodeAssist returns no tier info
   let currentTierName = "Google AI Pro";
   let currentTierDescription = "You can upgrade to a Google AI Ultra plan to receive higher rate limits.";
   let upgradeUrl = "https://one.google.com/explore-plan/ai-premium";
   let upgradeBtnText = "Upgrade";
+
+  // The companionProject is required by some endpoints to retrieve per-account quota
   let companionProject: string | undefined = undefined;
 
-  const endpoints = ["https://daily-cloudcode-pa.googleapis.com", "https://cloudcode-pa.googleapis.com"];
+  // Antigravity IDE queries these endpoints in this priority order
+  const apiEndpoints = ["https://cloudaicompanion.googleapis.com", "https://daily-cloudcode-pa.googleapis.com", "https://cloudcode-pa.googleapis.com"];
 
-  // 1. Query user plan tier from Cloud Code API
-  // 1. Query user plan tier from Cloud Code API
-  for (const base of endpoints) {
+  // HTTP headers matching what the Antigravity IDE client sends
+  const clientHeaders: Record<string, string> = {
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+    "User-Agent": "antigravity/1.11.3",
+    "X-Goog-Api-Client": "antigravity/1.11.3 gl-node/22 grpc-node/1.24",
+  };
+
+  // Request body matching the Antigravity IDE client metadata format
+  const loadCodeAssistBody = JSON.stringify({
+    metadata: {
+      ideType: "IDE_UNSPECIFIED",
+      platform: "PLATFORM_UNSPECIFIED",
+      pluginType: "PLUGIN_TYPE_UNSPECIFIED",
+      extensionVersion: "1.11.3",
+    },
+    mode: "FULL_ELIGIBILITY_CHECK",
+  });
+
+  // Step 1: loadCodeAssist — resolve user tier and companion project ID
+  let loadCodeAssistSucceeded = false;
+
+  for (const base of apiEndpoints) {
     try {
-      // First attempt fast standard payload
-      let res = await fetch(`${base}/v1internal:loadCodeAssist`, {
+      const res = await fetch(`${base}/v1internal:loadCodeAssist`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-          "User-Agent": "antigravity/1.11.3",
-          "X-Goog-Api-Client": "antigravity/1.11.3",
-        },
-        body: "{}",
-        signal: AbortSignal.timeout(6000),
+        headers: clientHeaders,
+        body: loadCodeAssistBody,
+        signal: AbortSignal.timeout(8000),
       });
-
-      if (!res.ok) {
-        // Fallback with detailed client metadata
-        res = await fetch(`${base}/v1internal:loadCodeAssist`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-            "User-Agent": "antigravity/1.11.3",
-            "X-Goog-Api-Client": "antigravity/1.11.3",
-          },
-          body: JSON.stringify({
-            metadata: {
-              ideType: "ANTIGRAVITY",
-              platform: "WINDOWS_AMD64",
-              pluginType: "GEMINI",
-            },
-            mode: "FULL_ELIGIBILITY_CHECK",
-          }),
-          signal: AbortSignal.timeout(6000),
-        });
-      }
 
       if (res.ok) {
         const body = await res.json();
-        const tier = body.currentTier || body.response?.currentTier;
+
+        // Extract tier from all known response shapes across API versions
+        const tier = body.currentTier ?? body.response?.currentTier ?? body.codeAssistTierInfo?.currentTier;
+
         if (tier) {
-          currentTierName = tier.name || currentTierName;
-          currentTierDescription = tier.upgradeSubscriptionText || tier.description || currentTierDescription;
-          upgradeUrl = tier.upgradeSubscriptionUri || upgradeUrl;
-          upgradeBtnText = tier.upgradeButtonText || upgradeBtnText;
+          currentTierName = tier.name ?? tier.tierName ?? currentTierName;
+          currentTierDescription = tier.upgradeSubscriptionText ?? tier.description ?? tier.subtext ?? currentTierDescription;
+          upgradeUrl = tier.upgradeSubscriptionUri ?? tier.upgradeUrl ?? tier.upgradeUri ?? upgradeUrl;
+          upgradeBtnText = tier.upgradeButtonText ?? tier.upgradeText ?? upgradeBtnText;
         }
-        if (body.cloudaicompanionProject || body.project) {
-          companionProject = body.cloudaicompanionProject || body.project;
-        }
+
+        // Extract the companion project ID required for accurate per-account quota queries
+        companionProject = body.cloudaicompanionProject ?? body.cloudAiCompanionProject ?? body.project ?? body.response?.cloudaicompanionProject ?? body.response?.project ?? undefined;
+
+        console.log("[GraviQuota] loadCodeAssist success:", {
+          endpoint: base,
+          tier: currentTierName,
+          companionProject,
+        });
+
+        loadCodeAssistSucceeded = true;
         break;
+      } else {
+        const errText = await res.text().catch(() => "");
+        console.warn(`[GraviQuota] loadCodeAssist HTTP ${res.status} at ${base}:`, errText.slice(0, 300));
       }
-    } catch {
-      // Continue to next endpoint fallback
+    } catch (err: any) {
+      console.warn(`[GraviQuota] loadCodeAssist network error at ${base}:`, err?.message);
     }
   }
 
-  const isProOrUltra = currentTierName.toLowerCase().includes("pro") || currentTierName.toLowerCase().includes("ultra");
-
-  // 2. Query Quota Summary buckets from retrieveUserQuotaSummary
+  // Step 2: retrieveUserQuotaSummary — fetch actual quota buckets per model group
+  // We try multiple project ID formats because different API endpoints and
+  // account configurations expect different formats.
   let parsedGroups: ModelQuotaGroup[] = [];
-  const projectCandidates = companionProject ? [undefined, companionProject, companionProject.startsWith("projects/") ? companionProject : `projects/${companionProject}`] : [undefined];
 
-  for (const base of endpoints) {
-    for (const proj of projectCandidates) {
+  // Build all project candidate variants to maximise chance of getting data
+  const projectCandidates: Array<string | undefined> = [];
+
+  if (companionProject) {
+    const normalized = companionProject.startsWith("projects/") ? companionProject : `projects/${companionProject}`;
+    const bare = companionProject.startsWith("projects/") ? companionProject.slice("projects/".length) : companionProject;
+
+    // Try with-prefix first (most common for cloudaicompanion endpoint)
+    projectCandidates.push(normalized, bare);
+  }
+
+  // Also try without any project (works on some endpoints)
+  projectCandidates.push(undefined);
+
+  outerLoop: for (const base of apiEndpoints) {
+    for (const project of projectCandidates) {
       try {
-        const bodyPayload = proj ? { project: proj } : {};
+        const requestBody: Record<string, unknown> = {};
+        if (project) {
+          requestBody.project = project;
+        }
+
         const res = await fetch(`${base}/v1internal:retrieveUserQuotaSummary`, {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-            "User-Agent": "antigravity/1.11.3",
-            "X-Goog-Api-Client": "antigravity/1.11.3",
-          },
-          body: JSON.stringify(bodyPayload),
-          signal: AbortSignal.timeout(6000),
+          headers: clientHeaders,
+          body: JSON.stringify(requestBody),
+          signal: AbortSignal.timeout(8000),
         });
 
         if (res.ok) {
           const body = await res.json();
-          const rawGroups = body.response?.groups || body.groups;
+
+          // Extract groups from all known response shapes
+          const rawGroups: unknown[] = (body.groups as unknown[]) ?? (body.response?.groups as unknown[]) ?? (body.quotaSummary?.groups as unknown[]) ?? [];
+
+          console.log("[GraviQuota] retrieveUserQuotaSummary:", {
+            endpoint: base,
+            project,
+            groupCount: rawGroups.length,
+            firstGroupSample: rawGroups[0] ? JSON.stringify(rawGroups[0]).slice(0, 400) : "none",
+          });
+
           if (Array.isArray(rawGroups) && rawGroups.length > 0) {
-            parsedGroups = rawGroups.map((group: any) => {
-              const rawBuckets = Array.isArray(group.buckets) ? group.buckets : [];
-              const buckets: QuotaBucket[] = rawBuckets.map((b: any) => {
-                const fraction = typeof b.remainingFraction === "number" ? b.remainingFraction : b.remainingAmount != null ? b.remainingAmount : 0;
-                const percentage = fraction <= 1 && fraction > 0 ? Math.round(fraction * 100) : Math.round(fraction);
+            parsedGroups = rawGroups.map((group: any): ModelQuotaGroup => {
+              const rawBuckets: any[] = Array.isArray(group.buckets) ? group.buckets : [];
+
+              const buckets: QuotaBucket[] = rawBuckets.map((b: any): QuotaBucket => {
+                // The API returns remainingFraction as a float in [0.0, 1.0]
+                // Some legacy endpoints use remainingAmount which may be [0, 100] or [0.0, 1.0]
+                let percentage = 0;
+
+                if (typeof b.remainingFraction === "number") {
+                  percentage = Math.round(b.remainingFraction * 100);
+                } else if (typeof b.remainingAmount === "number") {
+                  percentage = b.remainingAmount <= 1.0 ? Math.round(b.remainingAmount * 100) : Math.round(b.remainingAmount);
+                }
+
+                // Clamp to valid range [0, 100]
+                percentage = Math.min(100, Math.max(0, percentage));
+
+                // Build a human-readable description: use API description, fall back to reset time
+                let description: string | undefined = b.description;
+                if (!description && b.resetTime) {
+                  try {
+                    description = `You have used some of your limit, it will fully refresh in ${new Date(b.resetTime).toLocaleString()}.`;
+                  } catch {
+                    description = `Resets at ${b.resetTime}`;
+                  }
+                }
 
                 return {
-                  name: b.displayName || "Limit Remaining",
+                  name: b.displayName ?? b.name ?? "Limit Remaining",
                   percentageRemaining: percentage,
-                  description: b.description,
+                  description,
                   resetTime: b.resetTime,
                   isExhausted: percentage <= 0,
                 };
               });
 
+              const groupName: string = group.displayName ?? group.name ?? "AI Models";
+              const category: "gemini" | "claude_gpt" = groupName.toLowerCase().includes("gemini") ? "gemini" : "claude_gpt";
+
               return {
-                name: group.displayName || "AI Models",
-                category: (group.displayName || "").toLowerCase().includes("gemini") ? "gemini" : "claude_gpt",
+                name: groupName,
+                category,
                 buckets,
                 percentageRemaining: buckets[0]?.percentageRemaining ?? 0,
                 isExhausted: (buckets[0]?.percentageRemaining ?? 0) <= 0,
               };
             });
-            break;
+
+            break outerLoop;
           }
+        } else {
+          const errText = await res.text().catch(() => "");
+          console.warn(`[GraviQuota] retrieveUserQuotaSummary HTTP ${res.status} at ${base} (project=${project}):`, errText.slice(0, 300));
         }
-      } catch {
-        // Continue to next candidate
+      } catch (err: any) {
+        console.warn(`[GraviQuota] retrieveUserQuotaSummary network error at ${base} (project=${project}):`, err?.message);
       }
-    }
-    if (parsedGroups.length > 0) break;
-  }
-
-  // 3. Fallback to fetchAvailableModels if retrieveUserQuotaSummary was empty
-  if (parsedGroups.length === 0) {
-    for (const base of endpoints) {
-      for (const proj of projectCandidates) {
-        try {
-          const bodyPayload = proj ? { project: proj } : {};
-          const res = await fetch(`${base}/v1internal:fetchAvailableModels`, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              "Content-Type": "application/json",
-              "User-Agent": "antigravity/1.11.3",
-              "X-Goog-Api-Client": "antigravity/1.11.3",
-            },
-            body: JSON.stringify(bodyPayload),
-            signal: AbortSignal.timeout(6000),
-          });
-
-          if (res.ok) {
-            const body = await res.json();
-            const rawModels = body.models || body.response?.models;
-
-            // Handle both object map { [modelId]: ModelInfo } and array format
-            const modelsList: any[] = Array.isArray(rawModels)
-              ? rawModels
-              : typeof rawModels === "object" && rawModels !== null
-                ? Object.entries(rawModels).map(([k, v]: [string, any]) => ({
-                    modelId: k,
-                    label: v?.displayName || v?.label || k,
-                    quotaInfo: v?.quotaInfo,
-                  }))
-                : [];
-
-            if (modelsList.length > 0) {
-              const geminiModels = modelsList.filter((m: any) => (m.label || m.modelId || "").toLowerCase().includes("gemini"));
-              const claudeGptModels = modelsList.filter((m: any) => {
-                const n = (m.label || m.modelId || "").toLowerCase();
-                return n.includes("claude") || n.includes("gpt") || n.includes("3p");
-              });
-
-              const activeGemini = geminiModels.find((m: any) => typeof m.quotaInfo?.remainingFraction === "number") || geminiModels[0];
-              const activeClaude = claudeGptModels.find((m: any) => typeof m.quotaInfo?.remainingFraction === "number") || claudeGptModels[0];
-
-              const geminiFraction = activeGemini?.quotaInfo?.remainingFraction ?? (isProOrUltra ? 1.0 : 0);
-              const claudeFraction = activeClaude?.quotaInfo?.remainingFraction ?? (isProOrUltra ? 1.0 : 0);
-
-              const geminiPct = Math.round(geminiFraction * 100);
-              const claudePct = Math.round(claudeFraction * 100);
-
-              parsedGroups = [
-                {
-                  name: "Gemini Models",
-                  category: "gemini",
-                  buckets: [
-                    {
-                      name: "Weekly Limit Remaining",
-                      percentageRemaining: geminiPct,
-                      description: "Online model rate limit retrieved from Google Cloud Code API.",
-                      resetTime: activeGemini?.quotaInfo?.resetTime,
-                      isExhausted: geminiPct <= 0,
-                    },
-                  ],
-                  percentageRemaining: geminiPct,
-                  isExhausted: geminiPct <= 0,
-                },
-                {
-                  name: "Claude and GPT models",
-                  category: "claude_gpt",
-                  buckets: [
-                    {
-                      name: "Weekly Limit Remaining",
-                      percentageRemaining: claudePct,
-                      description: "Online model rate limit retrieved from Google Cloud Code API.",
-                      resetTime: activeClaude?.quotaInfo?.resetTime,
-                      isExhausted: claudePct <= 0,
-                    },
-                  ],
-                  percentageRemaining: claudePct,
-                  isExhausted: claudePct <= 0,
-                },
-              ];
-              break;
-            }
-          }
-        } catch {
-          // Fallback to next
-        }
-      }
-      if (parsedGroups.length > 0) break;
     }
   }
 
-  // If live groups were found from real Google API
+  // Step 3: Build and return the final structured quota response
   if (parsedGroups.length > 0) {
-    const geminiGroup = parsedGroups.find((g) => g.category === "gemini") || parsedGroups[0];
-    const claudeGroup = parsedGroups.find((g) => g.category === "claude_gpt") || parsedGroups[1] || parsedGroups[0];
+    // Real live quota data fetched successfully
+    const geminiGroup = parsedGroups.find((g) => g.category === "gemini") ?? parsedGroups[0];
+    const claudeGroup = parsedGroups.find((g) => g.category === "claude_gpt") ?? parsedGroups[1] ?? parsedGroups[0];
 
     return {
       planName: currentTierName,
       planSubtext: currentTierDescription,
       upgradeUrl,
       upgradeButtonText: upgradeBtnText,
-      credits: isProOrUltra
-        ? {
-            enabled: false,
-            title: "Enable AI Credit Overages",
-            description:
-              "When toggled on, Antigravity will use your AI credits to fulfill model requests once you're out of model quota. Antigravity will always use your model quota first before using AI credits.",
-            learnMoreUrl: "https://cloud.google.com/products/gemini/pricing",
-          }
-        : undefined,
+      credits: {
+        enabled: false,
+        title: "Enable AI Credit Overages",
+        description:
+          "When toggled on, Antigravity will use your AI credits to fulfill model requests once you're out of model quota. Antigravity will always use your model quota first before using AI credits.",
+        learnMoreUrl: "https://cloud.google.com/products/gemini/pricing",
+      },
       gemini: {
         name: geminiGroup.name,
         category: "gemini",
@@ -377,52 +343,58 @@ export async function fetchGoogleLiveQuota(accessToken: string): Promise<Partial
     };
   }
 
-  // Fallback state for online authenticated account when Google Cloud Code PA returns no buckets:
-  // For verified Pro/Ultra accounts, report active plan capacity rather than a misleading 0% exhausted state.
-  const defaultPercentage = isProOrUltra ? 100 : 0;
-  const personalAccountSubtext = isProOrUltra
-    ? "Your Google AI Pro plan is active. To synchronize live rolling 5-hour consumption counters, open the Antigravity desktop client or provide a desktop bearer token."
-    : currentTierDescription;
+  // ⚠️ Fallback: authenticated but no quota groups returned.
+  //
+  // This happens because:
+  //   - The Google OAuth token (cloud-platform scope) does not have the internal
+  //     "aicode" scope that the Antigravity IDE desktop client uses. The quota
+  //     summary endpoint may silently return empty groups for web OAuth tokens.
+  //   - The companionProject may not have been discovered, so the API cannot
+  //     associate the request with the correct billing/quota account.
+  //
+  // We intentionally return 0% rather than fabricating 100% — an honest "unknown"
+  // state is always preferable to a misleading full-quota indicator.
+  const fallbackDescription = loadCodeAssistSucceeded
+    ? "Live quota counters require the Antigravity desktop client bearer token. Your plan tier was detected, but per-model usage data is not accessible via Google OAuth web flow."
+    : "Unable to reach the Google Cloud Code API. Check that your token has the cloud-platform scope and that network access to googleapis.com is available.";
 
   return {
     planName: currentTierName,
-    planSubtext: personalAccountSubtext,
+    planSubtext: fallbackDescription,
     upgradeUrl,
     upgradeButtonText: upgradeBtnText,
-    credits: isProOrUltra
-      ? {
-          enabled: false,
-          title: "Enable AI Credit Overages",
-          description:
-            "When toggled on, Antigravity will use your AI credits to fulfill model requests once you're out of model quota. Antigravity will always use your model quota first before using AI credits.",
-          learnMoreUrl: "https://cloud.google.com/products/gemini/pricing",
-        }
-      : undefined,
+    credits: {
+      enabled: false,
+      title: "Enable AI Credit Overages",
+      description:
+        "When toggled on, Antigravity will use your AI credits to fulfill model requests once you're out of model quota. Antigravity will always use your model quota first before using AI credits.",
+      learnMoreUrl: "https://cloud.google.com/products/gemini/pricing",
+    },
     gemini: {
       name: "Gemini Models",
       category: "gemini",
-      percentageRemaining: defaultPercentage,
-      isExhausted: defaultPercentage <= 0,
+      percentageRemaining: 0,
+      isExhausted: false,
       buckets: [
         {
           name: "Weekly Limit Remaining",
-          percentageRemaining: defaultPercentage,
-          description: "Online account connected. Rolling limits are synchronized directly with Google Cloud Code API.",
-          isExhausted: defaultPercentage <= 0,
+          percentageRemaining: 0,
+          description: fallbackDescription,
+          isExhausted: false,
         },
       ],
     },
     claudeGpt: {
       name: "Claude and GPT models",
       category: "claude_gpt",
-      percentageRemaining: defaultPercentage,
-      isExhausted: defaultPercentage <= 0,
+      percentageRemaining: 0,
+      isExhausted: false,
       buckets: [
         {
           name: "Weekly Limit Remaining",
-          percentageRemaining: defaultPercentage,
-          description: "Online account connected. Rolling limits are synchronized directly with Google Cloud Code API.",
-          isExhausted: defaultPercentage <= 0,
+          percentageRemaining: 0,
+          description: fallbackDescription,
+          isExhausted: false,
         },
       ],
     },
