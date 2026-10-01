@@ -322,18 +322,26 @@ export async function fetchUnifiedQuotaData(options: FetchQuotaOptions = {}): Pr
     };
   }
 
-  // 2. Fetch live quota online from Google Cloud Code API for the authenticated account (Email A)
-  // whenever local server is unavailable or belongs to a different email (Email B)
-  if (effectiveToken) {
+  // 2. Fetch live quota from Google Cloud Code API.
+  //
+  // IMPORTANT: cloudcode-pa.googleapis.com is a Google-internal "Private API".
+  // It requires the Antigravity desktop bearer token (which carries the internal
+  // `aicode` scope). Standard web OAuth tokens (cloud-platform scope) will always
+  // receive HTTP 403 — regardless of which GCP project they belong to.
+  //
+  // Therefore we ONLY attempt the live quota call when the user has explicitly
+  // provided a manual desktop bearer token. Session cookie tokens (Google Sign In)
+  // are skipped to avoid 403 noise and unnecessary latency on every page load.
+  if (manualToken) {
     try {
-      const liveData = await fetchGoogleLiveQuota(effectiveToken);
+      const liveData = await fetchGoogleLiveQuota(manualToken);
       data = {
         ...data,
         ...liveData,
         lastUpdated: new Date().toISOString(),
       };
     } catch (err) {
-      console.warn("Could not query Google Cloud live quota, using fallback:", err);
+      console.warn("[GraviQuota] Live quota fetch failed for manual token:", err);
     }
   }
 

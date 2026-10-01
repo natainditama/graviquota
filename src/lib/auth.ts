@@ -120,9 +120,9 @@ export async function validateGoogleAccessToken(accessToken: string): Promise<{ 
 }
 
 /**
- * Attempt one HTTP call to a Cloud Code Assist endpoint.
- * Returns parsed JSON body on HTTP 200, or null with a WARN log on any failure.
- * All failures are always logged at WARN level so they appear in Vercel logs.
+ * Perform one HTTP POST to a Cloud Code Assist endpoint.
+ * Returns parsed JSON body on HTTP 200, or null on any failure.
+ * Every failure is logged at WARN level so it appears in Vercel function logs.
  */
 async function trySingleApiRequest(label: string, url: string, headers: Record<string, string>, body: string): Promise<any | null> {
   try {
@@ -151,15 +151,19 @@ async function trySingleApiRequest(label: string, url: string, headers: Record<s
 }
 
 /**
- * Fetch real Antigravity / Gemini Code Assist quota using a Google Bearer access token.
+ * Fetch real Antigravity / Gemini Code Assist quota using a desktop Antigravity bearer token.
  *
- * Strategy:
- *   1. loadCodeAssist — detect user plan tier and companion project ID
+ * IMPORTANT: This function MUST only be called with a desktop Antigravity bearer token —
+ * NOT with a standard Google web OAuth token. The underlying API endpoint
+ * (cloudcode-pa.googleapis.com) is a Google-internal "Private API" that requires the
+ * internal `aicode` scope. This scope is exclusively present in tokens issued by the
+ * Antigravity IDE desktop client auth flow. Standard web OAuth tokens (cloud-platform
+ * scope) always receive HTTP 403, regardless of which GCP project they belong to.
+ *
+ * Flow:
+ *   1. loadCodeAssist  — detect user plan tier and cloudai companion project ID
  *   2. retrieveUserQuotaSummary — read remaining quota fraction per model group
- *   3. Return structured QuotaData; fall back to honest 0% if API is inaccessible
- *
- * We try multiple endpoint hosts, API path formats, and request body formats to
- * maximise compatibility across Antigravity IDE API versions.
+ *   3. Return structured QuotaData; fall back to honest 0% if API is unreachable
  */
 export async function fetchGoogleLiveQuota(accessToken: string): Promise<Partial<QuotaData>> {
   let currentTierName = "Google AI Pro";
@@ -168,51 +172,36 @@ export async function fetchGoogleLiveQuota(accessToken: string): Promise<Partial
   let upgradeBtnText = "Upgrade";
   let companionProject: string | undefined = undefined;
 
-  // Minimal headers required for all Cloud Code Assist API requests.
-  // We intentionally avoid exotic custom headers that might be blocked.
-  const baseHeaders: Record<string, string> = {
+  // cloudcode-pa.googleapis.com is the confirmed correct production endpoint for
+  // the Antigravity quota API. Requires desktop bearer token (aicode scope).
+  const API_BASE = "https://cloudcode-pa.googleapis.com";
+
+  const clientHeaders: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
     "Content-Type": "application/json",
   };
 
   // ---------------------------------------------------------------------------
-  // Step 1: loadCodeAssist — resolve user plan tier + companion project ID
-  //
-  // We try every combination of:
-  //   - API endpoint host  (cloudcode-pa, daily-cloudcode-pa, cloudaicompanion)
-  //   - API path format    (/v1internal:method  vs  /v1:method)
-  //   - Request body       ({} minimal  vs  full metadata object)
-  //
-  // All failures are logged at WARN level so they appear in Vercel function logs.
+  // Step 1: loadCodeAssist — resolve user plan tier and companion project ID
   // ---------------------------------------------------------------------------
-  const loadCodeAssistAttempts: Array<{ url: string; body: string }> = [];
-
-  // Build all endpoint × path × body combinations
-  for (const host of ["https://cloudcode-pa.googleapis.com", "https://daily-cloudcode-pa.googleapis.com", "https://cloudaicompanion.googleapis.com"]) {
-    for (const path of ["/v1internal:loadCodeAssist", "/v1:loadCodeAssist"]) {
-      for (const body of [
-        // Minimal body — most permissive
-        "{}",
-        // Full metadata body used by Antigravity IDE
-        JSON.stringify({
-          metadata: {
-            ideType: "ANTIGRAVITY",
-            platform: "LINUX_AMD64",
-            pluginType: "GEMINI",
-            extensionVersion: "1.11.3",
-          },
-          mode: "FULL_ELIGIBILITY_CHECK",
-        }),
-      ]) {
-        loadCodeAssistAttempts.push({ url: `${host}${path}`, body });
-      }
-    }
-  }
-
   let loadCodeAssistSucceeded = false;
 
-  for (const { url, body } of loadCodeAssistAttempts) {
-    const result = await trySingleApiRequest("loadCodeAssist", url, baseHeaders, body);
+  // Try full metadata body first (matches Antigravity IDE format), then minimal fallback
+  const loadAssistBodies = [
+    JSON.stringify({
+      metadata: {
+        ideType: "ANTIGRAVITY",
+        platform: "LINUX_AMD64",
+        pluginType: "GEMINI",
+        extensionVersion: "1.11.3",
+      },
+      mode: "FULL_ELIGIBILITY_CHECK",
+    }),
+    "{}",
+  ];
+
+  for (const body of loadAssistBodies) {
+    const result = await trySingleApiRequest("loadCodeAssist", `${API_BASE}/v1internal:loadCodeAssist`, clientHeaders, body);
 
     if (result !== null) {
       // Extract tier from all known response envelope shapes
@@ -225,12 +214,10 @@ export async function fetchGoogleLiveQuota(accessToken: string): Promise<Partial
         upgradeBtnText = tier.upgradeButtonText ?? tier.upgradeText ?? upgradeBtnText;
       }
 
-      // Companion project ID is required for accurate per-account quota queries
+      // Companion project ID is needed for accurate per-account quota queries
       companionProject = result.cloudaicompanionProject ?? result.cloudAiCompanionProject ?? result.project ?? result.response?.cloudaicompanionProject ?? result.response?.project ?? undefined;
 
-      // Log success at WARN level so it is always visible in Vercel logs
       console.warn("[GraviQuota] loadCodeAssist SUCCESS:", {
-        url,
         tier: currentTierName,
         companionProject,
         rawKeys: Object.keys(result),
@@ -242,48 +229,33 @@ export async function fetchGoogleLiveQuota(accessToken: string): Promise<Partial
   }
 
   // ---------------------------------------------------------------------------
-  // Step 2: retrieveUserQuotaSummary — fetch remaining quota buckets
-  //
-  // Same strategy: try all endpoint/path combinations, plus project ID variants.
-  // Log both successes AND 200 OK responses with empty groups at WARN level.
+  // Step 2: retrieveUserQuotaSummary — fetch remaining quota buckets per model group
   // ---------------------------------------------------------------------------
   let parsedGroups: ModelQuotaGroup[] = [];
 
-  // Build all project ID format variants to pass to the API
+  // Build project ID variants — some API versions require the "projects/" prefix
   const projectVariants: Array<string | undefined> = [];
 
   if (companionProject) {
     const withPrefix = companionProject.startsWith("projects/") ? companionProject : `projects/${companionProject}`;
     const bareId = companionProject.startsWith("projects/") ? companionProject.slice("projects/".length) : companionProject;
-    // Most specific first (with projects/ prefix)
     projectVariants.push(withPrefix, bareId);
   }
 
   // Also try without a project field — works on some endpoint configurations
   projectVariants.push(undefined);
 
-  const quotaSummaryAttempts: Array<{ url: string; body: string }> = [];
+  for (const project of projectVariants) {
+    const requestBody: Record<string, unknown> = {};
+    if (project) requestBody.project = project;
 
-  for (const host of ["https://cloudcode-pa.googleapis.com", "https://daily-cloudcode-pa.googleapis.com", "https://cloudaicompanion.googleapis.com"]) {
-    for (const path of ["/v1internal:retrieveUserQuotaSummary", "/v1:retrieveUserQuotaSummary"]) {
-      for (const project of projectVariants) {
-        const bodyObj: Record<string, unknown> = {};
-        if (project) bodyObj.project = project;
-        quotaSummaryAttempts.push({ url: `${host}${path}`, body: JSON.stringify(bodyObj) });
-      }
-    }
-  }
-
-  for (const { url, body } of quotaSummaryAttempts) {
-    const result = await trySingleApiRequest("retrieveUserQuotaSummary", url, baseHeaders, body);
+    const result = await trySingleApiRequest("retrieveUserQuotaSummary", `${API_BASE}/v1internal:retrieveUserQuotaSummary`, clientHeaders, JSON.stringify(requestBody));
 
     if (result !== null) {
       const rawGroups: unknown[] = (result.groups as unknown[]) ?? (result.response?.groups as unknown[]) ?? (result.quotaSummary?.groups as unknown[]) ?? [];
 
-      // Always log the response so we can debug — even when groups is empty
       console.warn("[GraviQuota] retrieveUserQuotaSummary response:", {
-        url,
-        bodyProject: JSON.parse(body).project ?? "(none)",
+        project: project ?? "(none)",
         groupCount: rawGroups.length,
         rawKeys: Object.keys(result),
         firstGroup: rawGroups[0] ? JSON.stringify(rawGroups[0]).slice(0, 400) : "(none)",
@@ -295,7 +267,7 @@ export async function fetchGoogleLiveQuota(accessToken: string): Promise<Partial
 
           const buckets: QuotaBucket[] = rawBuckets.map((b: any): QuotaBucket => {
             // remainingFraction is a float [0.0, 1.0] from the Cloud Code API.
-            // Some legacy endpoints use remainingAmount which may be [0, 100] or [0.0, 1.0].
+            // Some endpoint versions use remainingAmount which may be [0, 100] or [0.0, 1.0].
             let percentage = 0;
 
             if (typeof b.remainingFraction === "number") {
@@ -312,8 +284,7 @@ export async function fetchGoogleLiveQuota(accessToken: string): Promise<Partial
             if (!description && b.resetTime) {
               try {
                 const resetDate = new Date(b.resetTime);
-                const now = Date.now();
-                const diffMs = resetDate.getTime() - now;
+                const diffMs = resetDate.getTime() - Date.now();
                 if (diffMs > 0) {
                   const diffDays = Math.floor(diffMs / 86400000);
                   const diffHours = Math.floor((diffMs % 86400000) / 3600000);
@@ -353,10 +324,9 @@ export async function fetchGoogleLiveQuota(accessToken: string): Promise<Partial
         });
 
         console.warn("[GraviQuota] Quota groups parsed successfully:", {
-          url,
           groupCount: parsedGroups.length,
-          gemini: parsedGroups.find((g) => g.category === "gemini")?.buckets?.[0]?.percentageRemaining,
-          claudeGpt: parsedGroups.find((g) => g.category === "claude_gpt")?.buckets?.[0]?.percentageRemaining,
+          geminiRemaining: parsedGroups.find((g) => g.category === "gemini")?.buckets?.[0]?.percentageRemaining,
+          claudeGptRemaining: parsedGroups.find((g) => g.category === "claude_gpt")?.buckets?.[0]?.percentageRemaining,
         });
 
         break;
@@ -365,11 +335,11 @@ export async function fetchGoogleLiveQuota(accessToken: string): Promise<Partial
   }
 
   // ---------------------------------------------------------------------------
-  // Step 3: Build the final structured quota response
+  // Step 3: Build and return the final structured quota response
   // ---------------------------------------------------------------------------
 
   if (parsedGroups.length > 0) {
-    // ✅ Real live quota data — return it directly
+    // ✅ Real live quota data fetched successfully
     const geminiGroup = parsedGroups.find((g) => g.category === "gemini") ?? parsedGroups[0];
     const claudeGroup = parsedGroups.find((g) => g.category === "claude_gpt") ?? parsedGroups[1] ?? parsedGroups[0];
 
@@ -403,18 +373,11 @@ export async function fetchGoogleLiveQuota(accessToken: string): Promise<Partial
     };
   }
 
-  // ⚠️ Fallback: authenticated but no quota groups returned from any endpoint.
-  //
-  // Possible reasons:
-  //   1. All Cloud Code API paths returned non-200 (endpoint changed / access denied)
-  //   2. The API returned HTTP 200 but groups array was empty
-  //   3. The Google OAuth web token lacks internal scopes required by the quota API
-  //
-  // We intentionally do NOT fabricate percentages. 0% + honest description is
-  // always better than misleading users with synthetic 100% or silent wrong data.
+  // ⚠️ Fallback: desktop token provided but API returned no quota groups.
+  // This should not happen for valid desktop tokens, but is handled gracefully.
   const fallbackDescription = loadCodeAssistSucceeded
-    ? "Your plan tier was detected but per-model usage counters are not accessible via Google web sign-in. For live quota data, open the Antigravity desktop client and paste your bearer token into the manual token field."
-    : "The Antigravity quota API is unreachable. Ensure your network can access cloudcode-pa.googleapis.com and that your token includes the cloud-platform scope. Alternatively, use the manual desktop bearer token option.";
+    ? "Your plan tier was detected but quota usage counters could not be retrieved. Try refreshing, or check that the desktop bearer token is current and not expired."
+    : "Unable to connect to the Antigravity quota API (cloudcode-pa.googleapis.com). Verify that the desktop bearer token is valid, not expired, and was copied from the Antigravity IDE.";
 
   return {
     planName: currentTierName,

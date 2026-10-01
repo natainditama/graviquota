@@ -31,7 +31,7 @@ function verifyHmacSignature(payload: string, signature: string): boolean {
 /**
  * Helper to extract Cookie header from various Request formats (Web Request or Node req)
  */
-function extractCookieHeaderFromInput(input: any): string | null {
+function extractCookieHeaderValue(input: any): string | null {
   if (!input) return null;
   if (typeof input?.headers?.get === "function") {
     return input.headers.get("cookie");
@@ -67,7 +67,7 @@ export function clearSignedSessionCookie(): string {
  * Parse and verify signed session from HTTP Request or event object
  */
 export function getSessionFromRequest(request: any): UserSession | null {
-  const cookieHeader = extractCookieHeaderFromInput(request);
+  const cookieHeader = extractCookieHeaderValue(request);
   if (!cookieHeader) return null;
 
   const cookies = cookieHeader.split(";").map((c) => c.trim());
@@ -124,7 +124,7 @@ export function clearAuthStateCookie(): string {
  * Read OAuth state cookie value from HTTP Request or event object
  */
 export function readAuthStateCookie(request: any): string | null {
-  const cookieHeader = extractCookieHeaderFromInput(request);
+  const cookieHeader = extractCookieHeaderValue(request);
   if (!cookieHeader) return null;
 
   const cookies = cookieHeader.split(";").map((c) => c.trim());
