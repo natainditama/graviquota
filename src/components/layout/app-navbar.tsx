@@ -6,36 +6,49 @@ import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuIte
 import type { UserSession } from "~/types/quota";
 import { cn } from "~/lib/utils";
 
+import { useAuth } from "~/context/auth";
+import { isProduction } from "~/lib/env";
+
 interface AppNavbarProps {
-  userSession: UserSession | null;
+  userSession?: UserSession | null;
   isSessionLoading?: boolean;
-  onOpenSetupGuide: () => void;
-  onLoginGoogle: () => void;
-  onLogout: () => void;
+  onOpenSetupGuide?: () => void;
+  onLoginGoogle?: () => void;
+  onLogout?: () => void;
 }
 
 export const AppNavbar: Component<AppNavbarProps> = (props) => {
+  const auth = useAuth();
+  const currentSession = () => (props.userSession !== undefined ? props.userSession : auth.userSession());
+  const isLoading = () => (props.isSessionLoading !== undefined ? props.isSessionLoading : auth.isSessionLoading());
+  const handleLogin = () => (props.onLoginGoogle ? props.onLoginGoogle() : auth.loginGoogle());
+  const handleLogout = () => (props.onLogout ? props.onLogout() : auth.logout());
+
   return (
     <header class="w-full border-b border-border bg-background/20 backdrop-blur-2xl sticky top-0 z-40 transition-colors">
       <div class="container mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
         {/* Brand Name */}
         <div class="flex items-center gap-3">
-          <span class="text-base font-bold text-foreground tracking-tight">GraviQuota</span>
+          <a href="/" class="text-base font-bold text-foreground tracking-tight hover:opacity-80 transition-opacity">
+            GraviQuota
+          </a>
         </div>
 
         {/* Right Actions */}
         <div class="flex items-center gap-2.5">
-          <Button variant="ghost" size="sm" onClick={() => props.onOpenSetupGuide()}>
-            <HelpCircle class="size-3.5" />
-            <span class="hidden sm:inline">Vercel Setup</span>
-          </Button>
+          <Show when={props.onOpenSetupGuide && !isProduction}>
+            <Button variant="ghost" size="sm" onClick={() => props.onOpenSetupGuide?.()}>
+              <HelpCircle class="size-3.5" />
+              <span class="hidden sm:inline">Vercel Setup</span>
+            </Button>
+          </Show>
 
           {/* Authentication State Handling */}
-          <Show when={!props.isSessionLoading} fallback={<Skeleton height={36} width={160} radius={6} />}>
+          <Show when={!isLoading()} fallback={<Skeleton height={36} width={160} radius={6} />}>
             <Show
-              when={props.userSession}
+              when={currentSession()}
               fallback={
-                <Button variant="default" size="sm" onClick={() => props.onLoginGoogle()}>
+                <Button variant="default" size="sm" onClick={handleLogin}>
                   {/* Google Colorful "G" Icon */}
                   <svg class="size-3.5 shrink-0" viewBox="0 0 24 24">
                     <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.66v3.04h3.87c2.27-2.09 3.67-5.17 3.67-9.14z" />
@@ -63,7 +76,7 @@ export const AppNavbar: Component<AppNavbarProps> = (props) => {
                       </div>
                     </DropdownMenuLabel>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem onSelect={() => props.onLogout()} class={cn(buttonVariants({ variant: "destructive", size: "sm" }), "w-full h-7 justify-start")}>
+                    <DropdownMenuItem onSelect={handleLogout} class={cn(buttonVariants({ variant: "destructive", size: "xs" }), "w-full justify-start")}>
                       <LogOut class="size-3.5" />
                       <span>Sign out</span>
                     </DropdownMenuItem>

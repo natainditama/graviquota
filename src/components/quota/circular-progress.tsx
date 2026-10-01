@@ -17,7 +17,7 @@ export const CircularProgress: Component<CircularProgressProps> = (props) => {
 
   const activeColor = () => {
     if (props.color) return props.color;
-    if (props.percentage <= 0) return "var(--color-muted)";
+    if (props.percentage <= 0) return "var(--color-primary-foreground)";
     if (props.percentage < 25) return "var(--color-error-foreground)";
     if (props.percentage < 50) return "var(--color-warning-foreground)";
     return "var(--color-success-foreground)";

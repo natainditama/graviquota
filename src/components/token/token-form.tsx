@@ -78,7 +78,7 @@ export const TokenForm: Component<TokenFormProps> = (props) => {
             </Button>
           </div>
           <CardDescription>
-            Provide an active <code class="font-mono">access_token</code> from your local Antigravity environment or OAuth session to check limits directly.
+            Provide an active access_token from your local Antigravity environment or OAuth session to check limits directly.
           </CardDescription>
         </CardHeader>
 

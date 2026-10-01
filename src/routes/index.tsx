@@ -9,10 +9,13 @@ import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { DEFAULT_QUOTA } from "~/types/quota";
 import { fetchServerQuotaData } from "~/lib/quota";
 import type { QuotaData, UserSession } from "~/types/quota";
+import { AppFooter } from "~/components/layout/app-footer";
+import { useAuth } from "~/context/auth";
 
 const getQuota = query((token?: string) => fetchServerQuotaData(token || undefined), "quota");
 
 export default function Home() {
+  const auth = useAuth();
   const [searchParams] = useSearchParams();
   const [manualToken, setManualToken] = createSignal<string | null>(null);
   const [isMutating, setIsMutating] = createSignal(false);
@@ -27,36 +30,33 @@ export default function Home() {
   // Unified single source of truth for quota data
   const currentQuota = () => clientQuota() || serverQuota() || DEFAULT_QUOTA;
 
-  // Single source of truth for session derived directly from unified quota data
+  // Single source of truth for session derived directly from unified quota data or provider
   const userSession = (): UserSession | null => {
     const user = currentQuota()?.user;
-    if (!user) return null;
-    return {
-      email: user.email,
-      name: user.name,
-      picture: user.picture,
-    };
+
+    if (user) {
+      return {
+        email: user.email,
+        name: user.name,
+        picture: user.picture,
+      };
+    }
+    return auth.userSession();
   };
 
   const handleLoginGoogle = () => {
-    window.location.href = "/api/auth/google";
+    auth.loginGoogle();
   };
 
   const handleLogout = async () => {
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
+      await auth.logout();
       setManualToken(null);
-      setClientQuota(DEFAULT_QUOTA);
 
-      toast.success("Signed out successfully", {
-        description: "Your Google session has been terminated and session cookies have been cleared.",
-      });
+      setClientQuota(DEFAULT_QUOTA);
       await loadQuota();
     } catch (e) {
       console.error("Logout error:", e);
-      toast.error("Sign out encountered an error", {
-        description: "Unable to complete sign out with the server. Please clear your browser cookies if the session persists.",
-      });
     }
   };
 
@@ -108,6 +108,13 @@ export default function Home() {
       const data: QuotaData = await res.json();
       setManualToken(token);
       setClientQuota(data);
+      if (data.user) {
+        auth.setUserSession({
+          email: data.user.email,
+          name: data.user.name,
+          picture: data.user.picture,
+        });
+      }
     } finally {
       setIsMutating(false);
     }
@@ -116,6 +123,7 @@ export default function Home() {
   const handleResetQuota = () => {
     setManualToken(null);
     setClientQuota(DEFAULT_QUOTA);
+    auth.setUserSession(null);
     toast.info("Quota reset to default", {
       description: "Active token and session overrides were cleared. Quota view has returned to default state.",
     });
@@ -145,7 +153,7 @@ export default function Home() {
           </h1>
 
           <p class="text-xs sm:text-sm text-muted-foreground max-w-lg mx-auto leading-relaxed">
-            Exact UI replica of the Antigravity IDE <strong>Models &amp; Usage</strong> modal. Sign in with your Google account to check remaining rate limits and reset countdowns in real time.
+            Real-time rate limit and quota monitoring for Antigravity AI models. Authenticate securely with your Google account or access token to inspect remaining limits and reset countdowns.
           </p>
         </div>
 
@@ -156,9 +164,7 @@ export default function Home() {
       </main>
 
       {/* Footer */}
-      <footer class="border-t border-border py-6 text-center text-xs text-muted-foreground">
-        <p class="font-medium text-foreground">GraviQuota - Antigravity Quota Tracker</p>
-      </footer>
+      <AppFooter />
 
       {/* Setup Guide Drawer */}
       <SetupDrawer open={isSetupGuideOpen()} onOpenChange={setIsSetupGuideOpen} />
